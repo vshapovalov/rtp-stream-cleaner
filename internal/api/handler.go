@@ -95,6 +95,14 @@ type getSessionResponse struct {
 	AudioBInBytes  uint64             `json:"audio_b_in_bytes"`
 	AudioAOutPkts  uint64             `json:"audio_a_out_pkts"`
 	AudioAOutBytes uint64             `json:"audio_a_out_bytes"`
+	VideoAInPkts   uint64             `json:"video_a_in_pkts"`
+	VideoAInBytes  uint64             `json:"video_a_in_bytes"`
+	VideoBOutPkts  uint64             `json:"video_b_out_pkts"`
+	VideoBOutBytes uint64             `json:"video_b_out_bytes"`
+	VideoBInPkts   uint64             `json:"video_b_in_pkts"`
+	VideoBInBytes  uint64             `json:"video_b_in_bytes"`
+	VideoAOutPkts  uint64             `json:"video_a_out_pkts"`
+	VideoAOutBytes uint64             `json:"video_a_out_bytes"`
 }
 
 type errorResponse struct {
@@ -208,6 +216,14 @@ func (h *Handler) handleSessionGet(w http.ResponseWriter, r *http.Request, id st
 		AudioBInBytes:  found.AudioCounters.BInBytes,
 		AudioAOutPkts:  found.AudioCounters.AOutPkts,
 		AudioAOutBytes: found.AudioCounters.AOutBytes,
+		VideoAInPkts:   found.VideoCounters.AInPkts,
+		VideoAInBytes:  found.VideoCounters.AInBytes,
+		VideoBOutPkts:  found.VideoCounters.BOutPkts,
+		VideoBOutBytes: found.VideoCounters.BOutBytes,
+		VideoBInPkts:   found.VideoCounters.BInPkts,
+		VideoBInBytes:  found.VideoCounters.BInBytes,
+		VideoAOutPkts:  found.VideoCounters.AOutPkts,
+		VideoAOutBytes: found.VideoCounters.AOutBytes,
 		Audio: mediaStateResponse{
 			APort:         found.Audio.APort,
 			BPort:         found.Audio.BPort,
@@ -266,6 +282,14 @@ func (h *Handler) handleSessionUpdate(w http.ResponseWriter, r *http.Request, id
 		AudioBInBytes:  updated.AudioCounters.BInBytes,
 		AudioAOutPkts:  updated.AudioCounters.AOutPkts,
 		AudioAOutBytes: updated.AudioCounters.AOutBytes,
+		VideoAInPkts:   updated.VideoCounters.AInPkts,
+		VideoAInBytes:  updated.VideoCounters.AInBytes,
+		VideoBOutPkts:  updated.VideoCounters.BOutPkts,
+		VideoBOutBytes: updated.VideoCounters.BOutBytes,
+		VideoBInPkts:   updated.VideoCounters.BInPkts,
+		VideoBInBytes:  updated.VideoCounters.BInBytes,
+		VideoAOutPkts:  updated.VideoCounters.AOutPkts,
+		VideoAOutBytes: updated.VideoCounters.AOutBytes,
 		Audio: mediaStateResponse{
 			APort:         updated.Audio.APort,
 			BPort:         updated.Audio.BPort,
