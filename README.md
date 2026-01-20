@@ -33,6 +33,7 @@ PUBLIC_IP=203.0.113.10 ./bin/rtp-cleaner
 | `PEER_LEARNING_WINDOW_SEC` | `10` | Time window to learn/re-learn doorphone peer on audio leg A. |
 | `MAX_FRAME_WAIT_MS` | `120` | Max wait before forcing a video frame flush. |
 | `IDLE_TIMEOUT_SEC` | `60` | Auto-delete sessions after inactivity. |
+| `VIDEO_INJECT_CACHED_SPS_PPS` | `false` | Inject cached SPS/PPS before IDR frames when missing in stream. |
 
 ## API quick reference
 

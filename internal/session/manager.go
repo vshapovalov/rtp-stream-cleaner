@@ -38,25 +38,27 @@ type Session struct {
 }
 
 type Manager struct {
-	mu                 sync.Mutex
-	sessions           map[string]*Session
-	allocator          *PortAllocator
-	peerLearningWindow time.Duration
-	maxFrameWait       time.Duration
-	idleTimeout        time.Duration
-	stopCh             chan struct{}
-	stopOnce           sync.Once
-	wg                 sync.WaitGroup
+	mu                      sync.Mutex
+	sessions                map[string]*Session
+	allocator               *PortAllocator
+	peerLearningWindow      time.Duration
+	maxFrameWait            time.Duration
+	idleTimeout             time.Duration
+	videoInjectCachedSPSPPS bool
+	stopCh                  chan struct{}
+	stopOnce                sync.Once
+	wg                      sync.WaitGroup
 }
 
-func NewManager(allocator *PortAllocator, peerLearningWindow, maxFrameWait, idleTimeout time.Duration) *Manager {
+func NewManager(allocator *PortAllocator, peerLearningWindow, maxFrameWait, idleTimeout time.Duration, videoInjectCachedSPSPPS bool) *Manager {
 	manager := &Manager{
-		sessions:           make(map[string]*Session),
-		allocator:          allocator,
-		peerLearningWindow: peerLearningWindow,
-		maxFrameWait:       maxFrameWait,
-		idleTimeout:        idleTimeout,
-		stopCh:             make(chan struct{}),
+		sessions:                make(map[string]*Session),
+		allocator:               allocator,
+		peerLearningWindow:      peerLearningWindow,
+		maxFrameWait:            maxFrameWait,
+		idleTimeout:             idleTimeout,
+		videoInjectCachedSPSPPS: videoInjectCachedSPSPPS,
+		stopCh:                  make(chan struct{}),
 	}
 	if idleTimeout > 0 {
 		manager.wg.Add(1)
@@ -116,7 +118,7 @@ func (m *Manager) Create(callID, fromTag, toTag string) (*Session, error) {
 		return nil, fmt.Errorf("video b socket: %w", err)
 	}
 	session.audioProxy = newAudioProxy(session, aConn, bConn, m.peerLearningWindow)
-	session.videoProxy = newVideoProxy(session, videoAConn, videoBConn, m.peerLearningWindow, m.maxFrameWait)
+	session.videoProxy = newVideoProxy(session, videoAConn, videoBConn, m.peerLearningWindow, m.maxFrameWait, m.videoInjectCachedSPSPPS)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()

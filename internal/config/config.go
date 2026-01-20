@@ -6,26 +6,28 @@ import (
 )
 
 type Config struct {
-	APIListenAddr         string
-	PublicIP              string
-	InternalIP            string
-	RTPPortMin            int
-	RTPPortMax            int
-	PeerLearningWindowSec int
-	MaxFrameWaitMS        int
-	IdleTimeoutSec        int
+	APIListenAddr           string
+	PublicIP                string
+	InternalIP              string
+	RTPPortMin              int
+	RTPPortMax              int
+	PeerLearningWindowSec   int
+	MaxFrameWaitMS          int
+	IdleTimeoutSec          int
+	VideoInjectCachedSPSPPS bool
 }
 
 func Load() Config {
 	return Config{
-		APIListenAddr:         getEnv("API_LISTEN_ADDR", "0.0.0.0:8080"),
-		PublicIP:              os.Getenv("PUBLIC_IP"),
-		InternalIP:            os.Getenv("INTERNAL_IP"),
-		RTPPortMin:            getEnvInt("RTP_PORT_MIN", 30000),
-		RTPPortMax:            getEnvInt("RTP_PORT_MAX", 40000),
-		PeerLearningWindowSec: getEnvInt("PEER_LEARNING_WINDOW_SEC", 10),
-		MaxFrameWaitMS:        getEnvInt("MAX_FRAME_WAIT_MS", 120),
-		IdleTimeoutSec:        getEnvInt("IDLE_TIMEOUT_SEC", 60),
+		APIListenAddr:           getEnv("API_LISTEN_ADDR", "0.0.0.0:8080"),
+		PublicIP:                os.Getenv("PUBLIC_IP"),
+		InternalIP:              os.Getenv("INTERNAL_IP"),
+		RTPPortMin:              getEnvInt("RTP_PORT_MIN", 30000),
+		RTPPortMax:              getEnvInt("RTP_PORT_MAX", 40000),
+		PeerLearningWindowSec:   getEnvInt("PEER_LEARNING_WINDOW_SEC", 10),
+		MaxFrameWaitMS:          getEnvInt("MAX_FRAME_WAIT_MS", 120),
+		IdleTimeoutSec:          getEnvInt("IDLE_TIMEOUT_SEC", 60),
+		VideoInjectCachedSPSPPS: getEnvBool("VIDEO_INJECT_CACHED_SPS_PPS", false),
 	}
 }
 
@@ -43,6 +45,18 @@ func getEnvInt(key string, fallback int) int {
 		return fallback
 	}
 	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func getEnvBool(key string, fallback bool) bool {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(value)
 	if err != nil {
 		return fallback
 	}

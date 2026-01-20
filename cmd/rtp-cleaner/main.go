@@ -29,6 +29,7 @@ func main() {
 		time.Duration(cfg.PeerLearningWindowSec)*time.Second,
 		time.Duration(cfg.MaxFrameWaitMS)*time.Millisecond,
 		time.Duration(cfg.IdleTimeoutSec)*time.Second,
+		cfg.VideoInjectCachedSPSPPS,
 	)
 	handler := api.NewHandler(cfg, manager)
 
