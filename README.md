@@ -127,3 +127,35 @@ socat -u UDP-RECV:<doorphone_port> STDOUT
 * No RTCP support.
 * No SRTP support.
 * No ICE or NAT traversal beyond comedia on leg A.
+
+## rtppeer tool
+
+`rtppeer` emulates a symmetric RTP peer (doorphone or rtpengine) for local integration tests without deployment.
+
+Doorphone-style send+receive example:
+
+```bash
+./rtppeer \
+  --bind-ip 127.0.0.1 \
+  --audio-port 50000 \
+  --video-port 50002 \
+  --audio-to 127.0.0.1:30000 \
+  --video-to 127.0.0.1:30004 \
+  --audio-ssrc 0x2F1989A0 \
+  --video-ssrc 0x45DB6713 \
+  --send-pcap testdata/doorphone_broken_av.pcap \
+  --recv-pcap out_doorphone_recv.pcap \
+  --pacing capture \
+  --duration 10
+```
+
+rtpengine-style receive-only example:
+
+```bash
+./rtppeer \
+  --bind-ip 127.0.0.1 \
+  --audio-port 40100 \
+  --video-port 40102 \
+  --recv-pcap out_rtpengine_recv.pcap \
+  --duration 10
+```
