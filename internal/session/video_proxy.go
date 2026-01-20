@@ -43,6 +43,7 @@ type videoProxy struct {
 	aConn               *net.UDPConn
 	bConn               *net.UDPConn
 	peerLearningWindow  time.Duration
+	maxFrameWait        time.Duration
 	ctx                 context.Context
 	cancel              context.CancelFunc
 	wg                  sync.WaitGroup
@@ -50,15 +51,19 @@ type videoProxy struct {
 	doorphonePeer       *net.UDPAddr
 	doorphoneLearnedAt  time.Time
 	lastMissingDestNsec atomic.Int64
+	frameBuffer         [][]byte
+	frameBufferStart    time.Time
+	frameBufferActive   bool
 }
 
-func newVideoProxy(session *Session, aConn, bConn *net.UDPConn, peerLearningWindow time.Duration) *videoProxy {
+func newVideoProxy(session *Session, aConn, bConn *net.UDPConn, peerLearningWindow, maxFrameWait time.Duration) *videoProxy {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &videoProxy{
 		session:            session,
 		aConn:              aConn,
 		bConn:              bConn,
 		peerLearningWindow: peerLearningWindow,
+		maxFrameWait:       maxFrameWait,
 		ctx:                ctx,
 		cancel:             cancel,
 	}
@@ -113,15 +118,11 @@ func (p *videoProxy) loopAIn() {
 		}
 		dest := p.session.videoDest.Load()
 		if dest == nil {
+			p.resetFrameBuffer()
 			p.logMissingDest()
 			continue
 		}
-		if _, err := p.bConn.WriteToUDP(buffer[:n], dest); err != nil {
-			log.Printf("video b leg write failed session=%s err=%v", p.session.ID, err)
-			continue
-		}
-		p.session.videoCounters.bOutPkts.Add(1)
-		p.session.videoCounters.bOutBytes.Add(uint64(n))
+		p.handleVideoPacket(buffer[:n], dest)
 	}
 }
 
@@ -240,4 +241,101 @@ func (p *videoProxy) analyzeFrameBoundaries(packet []byte) {
 	if rtpfix.IsFrameEnd(info) {
 		p.session.videoCounters.videoFramesEnded.Add(1)
 	}
+}
+
+func (p *videoProxy) handleVideoPacket(packet []byte, dest *net.UDPAddr) {
+	info, ok := parseH264Info(packet)
+	if ok && info.IsSlice {
+		now := time.Now()
+		p.flushOnTimeout(now, dest)
+		if rtpfix.IsFrameStart(info) {
+			if p.frameBufferActive && len(p.frameBuffer) > 0 {
+				p.flushFrameBuffer(dest)
+			}
+			p.startFrameBuffer(now)
+		}
+		if p.frameBufferActive {
+			p.bufferFramePacket(packet)
+			if rtpfix.IsFrameEnd(info) {
+				p.flushFrameBuffer(dest)
+			}
+			return
+		}
+	}
+	p.flushOnTimeout(time.Now(), dest)
+	p.sendPacket(packet, dest)
+}
+
+func parseH264Info(packet []byte) (rtpfix.H264Info, bool) {
+	header, ok := rtpfix.ParseRTPHeader(packet)
+	if !ok {
+		return rtpfix.H264Info{}, false
+	}
+	if header.HeaderLen >= len(packet) {
+		return rtpfix.H264Info{}, false
+	}
+	payload := packet[header.HeaderLen:]
+	return rtpfix.ParseH264(payload)
+}
+
+func (p *videoProxy) startFrameBuffer(now time.Time) {
+	p.frameBuffer = p.frameBuffer[:0]
+	p.frameBufferStart = now
+	p.frameBufferActive = true
+}
+
+func (p *videoProxy) bufferFramePacket(packet []byte) {
+	clone := make([]byte, len(packet))
+	copy(clone, packet)
+	p.frameBuffer = append(p.frameBuffer, clone)
+}
+
+func (p *videoProxy) flushOnTimeout(now time.Time, dest *net.UDPAddr) {
+	if !p.frameBufferActive || len(p.frameBuffer) == 0 {
+		return
+	}
+	if now.Sub(p.frameBufferStart) <= p.maxFrameWait {
+		return
+	}
+	p.flushFrameBuffer(dest)
+}
+
+func (p *videoProxy) flushFrameBuffer(dest *net.UDPAddr) {
+	if len(p.frameBuffer) == 0 {
+		p.frameBufferActive = false
+		return
+	}
+	last := len(p.frameBuffer) - 1
+	for i, packet := range p.frameBuffer {
+		setMarker(packet, i == last)
+		p.sendPacket(packet, dest)
+	}
+	p.frameBufferActive = false
+	p.frameBuffer = p.frameBuffer[:0]
+}
+
+func (p *videoProxy) sendPacket(packet []byte, dest *net.UDPAddr) {
+	if _, err := p.bConn.WriteToUDP(packet, dest); err != nil {
+		log.Printf("video b leg write failed session=%s err=%v", p.session.ID, err)
+		return
+	}
+	p.session.videoCounters.bOutPkts.Add(1)
+	p.session.videoCounters.bOutBytes.Add(uint64(len(packet)))
+}
+
+func (p *videoProxy) resetFrameBuffer() {
+	p.frameBufferActive = false
+	p.frameBuffer = p.frameBuffer[:0]
+	p.frameBufferStart = time.Time{}
+}
+
+func setMarker(packet []byte, marker bool) {
+	if len(packet) < 2 {
+		return
+	}
+	if marker {
+		packet[1] |= 0x80
+		return
+	}
+	packet[1] &^= 0x80
 }

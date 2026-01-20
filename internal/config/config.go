@@ -12,6 +12,7 @@ type Config struct {
 	RTPPortMin            int
 	RTPPortMax            int
 	PeerLearningWindowSec int
+	MaxFrameWaitMS        int
 }
 
 func Load() Config {
@@ -22,6 +23,7 @@ func Load() Config {
 		RTPPortMin:            getEnvInt("RTP_PORT_MIN", 30000),
 		RTPPortMax:            getEnvInt("RTP_PORT_MAX", 40000),
 		PeerLearningWindowSec: getEnvInt("PEER_LEARNING_WINDOW_SEC", 10),
+		MaxFrameWaitMS:        getEnvInt("MAX_FRAME_WAIT_MS", 120),
 	}
 }
 

@@ -38,13 +38,15 @@ type Manager struct {
 	sessions           map[string]*Session
 	allocator          *PortAllocator
 	peerLearningWindow time.Duration
+	maxFrameWait       time.Duration
 }
 
-func NewManager(allocator *PortAllocator, peerLearningWindow time.Duration) *Manager {
+func NewManager(allocator *PortAllocator, peerLearningWindow, maxFrameWait time.Duration) *Manager {
 	return &Manager{
 		sessions:           make(map[string]*Session),
 		allocator:          allocator,
 		peerLearningWindow: peerLearningWindow,
+		maxFrameWait:       maxFrameWait,
 	}
 }
 
@@ -97,7 +99,7 @@ func (m *Manager) Create(callID, fromTag, toTag string) (*Session, error) {
 		return nil, fmt.Errorf("video b socket: %w", err)
 	}
 	session.audioProxy = newAudioProxy(session, aConn, bConn, m.peerLearningWindow)
-	session.videoProxy = newVideoProxy(session, videoAConn, videoBConn, m.peerLearningWindow)
+	session.videoProxy = newVideoProxy(session, videoAConn, videoBConn, m.peerLearningWindow, m.maxFrameWait)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
