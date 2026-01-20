@@ -108,6 +108,9 @@ type getSessionResponse struct {
 	VideoFramesEnded   uint64             `json:"video_frames_ended"`
 	VideoFramesFlushed uint64             `json:"video_frames_flushed"`
 	VideoForcedFlushes uint64             `json:"video_forced_flushes"`
+	VideoInjectedSPS   uint64             `json:"video_injected_sps"`
+	VideoInjectedPPS   uint64             `json:"video_injected_pps"`
+	VideoSeqDelta      uint64             `json:"video_seq_delta_current"`
 	LastActivity       string             `json:"last_activity"`
 	State              string             `json:"state"`
 }
@@ -235,6 +238,9 @@ func (h *Handler) handleSessionGet(w http.ResponseWriter, r *http.Request, id st
 		VideoFramesEnded:   found.VideoCounters.VideoFramesEnded,
 		VideoFramesFlushed: found.VideoCounters.VideoFramesFlushed,
 		VideoForcedFlushes: found.VideoCounters.VideoForcedFlushes,
+		VideoInjectedSPS:   found.VideoCounters.VideoInjectedSPS,
+		VideoInjectedPPS:   found.VideoCounters.VideoInjectedPPS,
+		VideoSeqDelta:      found.VideoCounters.VideoSeqDelta,
 		LastActivity:       formatTime(found.LastActivity),
 		State:              found.State,
 		Audio: mediaStateResponse{
@@ -307,6 +313,9 @@ func (h *Handler) handleSessionUpdate(w http.ResponseWriter, r *http.Request, id
 		VideoFramesEnded:   updated.VideoCounters.VideoFramesEnded,
 		VideoFramesFlushed: updated.VideoCounters.VideoFramesFlushed,
 		VideoForcedFlushes: updated.VideoCounters.VideoForcedFlushes,
+		VideoInjectedSPS:   updated.VideoCounters.VideoInjectedSPS,
+		VideoInjectedPPS:   updated.VideoCounters.VideoInjectedPPS,
+		VideoSeqDelta:      updated.VideoCounters.VideoSeqDelta,
 		LastActivity:       formatTime(updated.LastActivity),
 		State:              updated.State,
 		Audio: mediaStateResponse{
