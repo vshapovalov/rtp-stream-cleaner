@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"sync"
 	"time"
 )
@@ -11,7 +12,7 @@ import (
 type Media struct {
 	APort         int
 	BPort         int
-	RTPEngineDest string
+	RTPEngineDest *net.UDPAddr
 }
 
 type Session struct {
@@ -78,6 +79,22 @@ func (m *Manager) Get(id string) (*Session, bool) {
 	return cloneSession(session), true
 }
 
+func (m *Manager) UpdateRTPDest(id string, audioDest, videoDest *net.UDPAddr) (*Session, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	session, ok := m.sessions[id]
+	if !ok {
+		return nil, false
+	}
+	if audioDest != nil {
+		session.Audio.RTPEngineDest = cloneUDPAddr(audioDest)
+	}
+	if videoDest != nil {
+		session.Video.RTPEngineDest = cloneUDPAddr(videoDest)
+	}
+	return cloneSession(session), true
+}
+
 func (m *Manager) Delete(id string) bool {
 	m.mu.Lock()
 	session, ok := m.sessions[id]
@@ -110,5 +127,24 @@ func cloneSession(session *Session) *Session {
 		return nil
 	}
 	clone := *session
+	clone.Audio = cloneMedia(session.Audio)
+	clone.Video = cloneMedia(session.Video)
+	return &clone
+}
+
+func cloneMedia(media Media) Media {
+	clone := media
+	if media.RTPEngineDest != nil {
+		dest := *media.RTPEngineDest
+		clone.RTPEngineDest = &dest
+	}
+	return clone
+}
+
+func cloneUDPAddr(addr *net.UDPAddr) *net.UDPAddr {
+	if addr == nil {
+		return nil
+	}
+	clone := *addr
 	return &clone
 }

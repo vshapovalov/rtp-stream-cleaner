@@ -3,7 +3,10 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"rtp-stream-cleaner/internal/config"
@@ -45,6 +48,15 @@ type createSessionRequest struct {
 		Enable bool `json:"enable"`
 		Fix    bool `json:"fix"`
 	} `json:"video"`
+}
+
+type updateSessionRequest struct {
+	Audio *updateMediaRequest `json:"audio"`
+	Video *updateMediaRequest `json:"video"`
+}
+
+type updateMediaRequest struct {
+	RTPEngineDest *string `json:"rtpengine_dest"`
 }
 
 type portResponse struct {
@@ -132,9 +144,28 @@ func (h *Handler) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleSessionByID(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/v1/session/")
-	if id == "" || strings.Contains(id, "/") {
+	path := strings.TrimPrefix(r.URL.Path, "/v1/session/")
+	if path == "" {
 		http.NotFound(w, r)
+		return
+	}
+	parts := strings.Split(path, "/")
+	if len(parts) > 2 || parts[0] == "" {
+		http.NotFound(w, r)
+		return
+	}
+	id := parts[0]
+	if len(parts) == 2 {
+		if parts[1] != "update" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		h.handleSessionUpdate(w, r, id)
 		return
 	}
 	switch r.Method {
@@ -164,12 +195,62 @@ func (h *Handler) handleSessionGet(w http.ResponseWriter, r *http.Request, id st
 		Audio: mediaStateResponse{
 			APort:         found.Audio.APort,
 			BPort:         found.Audio.BPort,
-			RTPEngineDest: found.Audio.RTPEngineDest,
+			RTPEngineDest: formatDest(found.Audio.RTPEngineDest),
 		},
 		Video: mediaStateResponse{
 			APort:         found.Video.APort,
 			BPort:         found.Video.BPort,
-			RTPEngineDest: found.Video.RTPEngineDest,
+			RTPEngineDest: formatDest(found.Video.RTPEngineDest),
+		},
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) handleSessionUpdate(w http.ResponseWriter, r *http.Request, id string) {
+	var req updateSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid json body"})
+		return
+	}
+	var audioDest *net.UDPAddr
+	if req.Audio != nil && req.Audio.RTPEngineDest != nil {
+		parsed, err := parseDest(*req.Audio.RTPEngineDest)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errorResponse{Error: fmt.Sprintf("audio rtpengine_dest %s", err)})
+			return
+		}
+		audioDest = parsed
+	}
+	var videoDest *net.UDPAddr
+	if req.Video != nil && req.Video.RTPEngineDest != nil {
+		parsed, err := parseDest(*req.Video.RTPEngineDest)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errorResponse{Error: fmt.Sprintf("video rtpengine_dest %s", err)})
+			return
+		}
+		videoDest = parsed
+	}
+	updated, ok := h.manager.UpdateRTPDest(id, audioDest, videoDest)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, errorResponse{Error: "session not found"})
+		return
+	}
+	resp := getSessionResponse{
+		ID:         updated.ID,
+		CallID:     updated.CallID,
+		FromTag:    updated.FromTag,
+		ToTag:      updated.ToTag,
+		PublicIP:   h.publicIP,
+		InternalIP: h.internalIP,
+		Audio: mediaStateResponse{
+			APort:         updated.Audio.APort,
+			BPort:         updated.Audio.BPort,
+			RTPEngineDest: formatDest(updated.Audio.RTPEngineDest),
+		},
+		Video: mediaStateResponse{
+			APort:         updated.Video.APort,
+			BPort:         updated.Video.BPort,
+			RTPEngineDest: formatDest(updated.Video.RTPEngineDest),
 		},
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -187,4 +268,26 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
+}
+
+func parseDest(raw string) (*net.UDPAddr, error) {
+	host, port, err := net.SplitHostPort(raw)
+	if err != nil {
+		return nil, fmt.Errorf("must be in ip:port format with port 1..65535")
+	}
+	if net.ParseIP(host) == nil {
+		return nil, fmt.Errorf("must be in ip:port format with port 1..65535")
+	}
+	portValue, err := strconv.Atoi(port)
+	if err != nil || portValue < 1 || portValue > 65535 {
+		return nil, fmt.Errorf("must be in ip:port format with port 1..65535")
+	}
+	return &net.UDPAddr{IP: net.ParseIP(host), Port: portValue}, nil
+}
+
+func formatDest(addr *net.UDPAddr) string {
+	if addr == nil {
+		return ""
+	}
+	return addr.String()
 }

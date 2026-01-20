@@ -315,7 +315,7 @@ docs/
 
 * `API_LISTEN_ADDR` (default `0.0.0.0:8080`)
 * `PUBLIC_IP` (обязателен)
-* `INTERNAL_IP`
+* `INTERNAL_IP` (если не задан, используется `PUBLIC_IP`)
 * `RTP_PORT_MIN`, `RTP_PORT_MAX`
 * `IDLE_TIMEOUT_SEC`
 * `MAX_FRAME_WAIT_MS`
