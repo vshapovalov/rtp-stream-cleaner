@@ -79,30 +79,32 @@ type createSessionResponse struct {
 }
 
 type getSessionResponse struct {
-	ID             string             `json:"id"`
-	CallID         string             `json:"call_id"`
-	FromTag        string             `json:"from_tag"`
-	ToTag          string             `json:"to_tag"`
-	PublicIP       string             `json:"public_ip"`
-	InternalIP     string             `json:"internal_ip"`
-	Audio          mediaStateResponse `json:"audio"`
-	Video          mediaStateResponse `json:"video"`
-	AudioAInPkts   uint64             `json:"audio_a_in_pkts"`
-	AudioAInBytes  uint64             `json:"audio_a_in_bytes"`
-	AudioBOutPkts  uint64             `json:"audio_b_out_pkts"`
-	AudioBOutBytes uint64             `json:"audio_b_out_bytes"`
-	AudioBInPkts   uint64             `json:"audio_b_in_pkts"`
-	AudioBInBytes  uint64             `json:"audio_b_in_bytes"`
-	AudioAOutPkts  uint64             `json:"audio_a_out_pkts"`
-	AudioAOutBytes uint64             `json:"audio_a_out_bytes"`
-	VideoAInPkts   uint64             `json:"video_a_in_pkts"`
-	VideoAInBytes  uint64             `json:"video_a_in_bytes"`
-	VideoBOutPkts  uint64             `json:"video_b_out_pkts"`
-	VideoBOutBytes uint64             `json:"video_b_out_bytes"`
-	VideoBInPkts   uint64             `json:"video_b_in_pkts"`
-	VideoBInBytes  uint64             `json:"video_b_in_bytes"`
-	VideoAOutPkts  uint64             `json:"video_a_out_pkts"`
-	VideoAOutBytes uint64             `json:"video_a_out_bytes"`
+	ID                 string             `json:"id"`
+	CallID             string             `json:"call_id"`
+	FromTag            string             `json:"from_tag"`
+	ToTag              string             `json:"to_tag"`
+	PublicIP           string             `json:"public_ip"`
+	InternalIP         string             `json:"internal_ip"`
+	Audio              mediaStateResponse `json:"audio"`
+	Video              mediaStateResponse `json:"video"`
+	AudioAInPkts       uint64             `json:"audio_a_in_pkts"`
+	AudioAInBytes      uint64             `json:"audio_a_in_bytes"`
+	AudioBOutPkts      uint64             `json:"audio_b_out_pkts"`
+	AudioBOutBytes     uint64             `json:"audio_b_out_bytes"`
+	AudioBInPkts       uint64             `json:"audio_b_in_pkts"`
+	AudioBInBytes      uint64             `json:"audio_b_in_bytes"`
+	AudioAOutPkts      uint64             `json:"audio_a_out_pkts"`
+	AudioAOutBytes     uint64             `json:"audio_a_out_bytes"`
+	VideoAInPkts       uint64             `json:"video_a_in_pkts"`
+	VideoAInBytes      uint64             `json:"video_a_in_bytes"`
+	VideoBOutPkts      uint64             `json:"video_b_out_pkts"`
+	VideoBOutBytes     uint64             `json:"video_b_out_bytes"`
+	VideoBInPkts       uint64             `json:"video_b_in_pkts"`
+	VideoBInBytes      uint64             `json:"video_b_in_bytes"`
+	VideoAOutPkts      uint64             `json:"video_a_out_pkts"`
+	VideoAOutBytes     uint64             `json:"video_a_out_bytes"`
+	VideoFramesStarted uint64             `json:"video_frames_started"`
+	VideoFramesEnded   uint64             `json:"video_frames_ended"`
 }
 
 type errorResponse struct {
@@ -202,28 +204,30 @@ func (h *Handler) handleSessionGet(w http.ResponseWriter, r *http.Request, id st
 		return
 	}
 	resp := getSessionResponse{
-		ID:             found.ID,
-		CallID:         found.CallID,
-		FromTag:        found.FromTag,
-		ToTag:          found.ToTag,
-		PublicIP:       h.publicIP,
-		InternalIP:     h.internalIP,
-		AudioAInPkts:   found.AudioCounters.AInPkts,
-		AudioAInBytes:  found.AudioCounters.AInBytes,
-		AudioBOutPkts:  found.AudioCounters.BOutPkts,
-		AudioBOutBytes: found.AudioCounters.BOutBytes,
-		AudioBInPkts:   found.AudioCounters.BInPkts,
-		AudioBInBytes:  found.AudioCounters.BInBytes,
-		AudioAOutPkts:  found.AudioCounters.AOutPkts,
-		AudioAOutBytes: found.AudioCounters.AOutBytes,
-		VideoAInPkts:   found.VideoCounters.AInPkts,
-		VideoAInBytes:  found.VideoCounters.AInBytes,
-		VideoBOutPkts:  found.VideoCounters.BOutPkts,
-		VideoBOutBytes: found.VideoCounters.BOutBytes,
-		VideoBInPkts:   found.VideoCounters.BInPkts,
-		VideoBInBytes:  found.VideoCounters.BInBytes,
-		VideoAOutPkts:  found.VideoCounters.AOutPkts,
-		VideoAOutBytes: found.VideoCounters.AOutBytes,
+		ID:                 found.ID,
+		CallID:             found.CallID,
+		FromTag:            found.FromTag,
+		ToTag:              found.ToTag,
+		PublicIP:           h.publicIP,
+		InternalIP:         h.internalIP,
+		AudioAInPkts:       found.AudioCounters.AInPkts,
+		AudioAInBytes:      found.AudioCounters.AInBytes,
+		AudioBOutPkts:      found.AudioCounters.BOutPkts,
+		AudioBOutBytes:     found.AudioCounters.BOutBytes,
+		AudioBInPkts:       found.AudioCounters.BInPkts,
+		AudioBInBytes:      found.AudioCounters.BInBytes,
+		AudioAOutPkts:      found.AudioCounters.AOutPkts,
+		AudioAOutBytes:     found.AudioCounters.AOutBytes,
+		VideoAInPkts:       found.VideoCounters.AInPkts,
+		VideoAInBytes:      found.VideoCounters.AInBytes,
+		VideoBOutPkts:      found.VideoCounters.BOutPkts,
+		VideoBOutBytes:     found.VideoCounters.BOutBytes,
+		VideoBInPkts:       found.VideoCounters.BInPkts,
+		VideoBInBytes:      found.VideoCounters.BInBytes,
+		VideoAOutPkts:      found.VideoCounters.AOutPkts,
+		VideoAOutBytes:     found.VideoCounters.AOutBytes,
+		VideoFramesStarted: found.VideoCounters.VideoFramesStarted,
+		VideoFramesEnded:   found.VideoCounters.VideoFramesEnded,
 		Audio: mediaStateResponse{
 			APort:         found.Audio.APort,
 			BPort:         found.Audio.BPort,
@@ -268,28 +272,30 @@ func (h *Handler) handleSessionUpdate(w http.ResponseWriter, r *http.Request, id
 		return
 	}
 	resp := getSessionResponse{
-		ID:             updated.ID,
-		CallID:         updated.CallID,
-		FromTag:        updated.FromTag,
-		ToTag:          updated.ToTag,
-		PublicIP:       h.publicIP,
-		InternalIP:     h.internalIP,
-		AudioAInPkts:   updated.AudioCounters.AInPkts,
-		AudioAInBytes:  updated.AudioCounters.AInBytes,
-		AudioBOutPkts:  updated.AudioCounters.BOutPkts,
-		AudioBOutBytes: updated.AudioCounters.BOutBytes,
-		AudioBInPkts:   updated.AudioCounters.BInPkts,
-		AudioBInBytes:  updated.AudioCounters.BInBytes,
-		AudioAOutPkts:  updated.AudioCounters.AOutPkts,
-		AudioAOutBytes: updated.AudioCounters.AOutBytes,
-		VideoAInPkts:   updated.VideoCounters.AInPkts,
-		VideoAInBytes:  updated.VideoCounters.AInBytes,
-		VideoBOutPkts:  updated.VideoCounters.BOutPkts,
-		VideoBOutBytes: updated.VideoCounters.BOutBytes,
-		VideoBInPkts:   updated.VideoCounters.BInPkts,
-		VideoBInBytes:  updated.VideoCounters.BInBytes,
-		VideoAOutPkts:  updated.VideoCounters.AOutPkts,
-		VideoAOutBytes: updated.VideoCounters.AOutBytes,
+		ID:                 updated.ID,
+		CallID:             updated.CallID,
+		FromTag:            updated.FromTag,
+		ToTag:              updated.ToTag,
+		PublicIP:           h.publicIP,
+		InternalIP:         h.internalIP,
+		AudioAInPkts:       updated.AudioCounters.AInPkts,
+		AudioAInBytes:      updated.AudioCounters.AInBytes,
+		AudioBOutPkts:      updated.AudioCounters.BOutPkts,
+		AudioBOutBytes:     updated.AudioCounters.BOutBytes,
+		AudioBInPkts:       updated.AudioCounters.BInPkts,
+		AudioBInBytes:      updated.AudioCounters.BInBytes,
+		AudioAOutPkts:      updated.AudioCounters.AOutPkts,
+		AudioAOutBytes:     updated.AudioCounters.AOutBytes,
+		VideoAInPkts:       updated.VideoCounters.AInPkts,
+		VideoAInBytes:      updated.VideoCounters.AInBytes,
+		VideoBOutPkts:      updated.VideoCounters.BOutPkts,
+		VideoBOutBytes:     updated.VideoCounters.BOutBytes,
+		VideoBInPkts:       updated.VideoCounters.BInPkts,
+		VideoBInBytes:      updated.VideoCounters.BInBytes,
+		VideoAOutPkts:      updated.VideoCounters.AOutPkts,
+		VideoAOutBytes:     updated.VideoCounters.AOutBytes,
+		VideoFramesStarted: updated.VideoCounters.VideoFramesStarted,
+		VideoFramesEnded:   updated.VideoCounters.VideoFramesEnded,
 		Audio: mediaStateResponse{
 			APort:         updated.Audio.APort,
 			BPort:         updated.Audio.BPort,

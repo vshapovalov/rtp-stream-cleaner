@@ -8,28 +8,34 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"rtp-stream-cleaner/internal/rtpfix"
 )
 
 type videoCounters struct {
-	aInPkts   atomic.Uint64
-	aInBytes  atomic.Uint64
-	bOutPkts  atomic.Uint64
-	bOutBytes atomic.Uint64
-	bInPkts   atomic.Uint64
-	bInBytes  atomic.Uint64
-	aOutPkts  atomic.Uint64
-	aOutBytes atomic.Uint64
+	aInPkts            atomic.Uint64
+	aInBytes           atomic.Uint64
+	bOutPkts           atomic.Uint64
+	bOutBytes          atomic.Uint64
+	bInPkts            atomic.Uint64
+	bInBytes           atomic.Uint64
+	aOutPkts           atomic.Uint64
+	aOutBytes          atomic.Uint64
+	videoFramesStarted atomic.Uint64
+	videoFramesEnded   atomic.Uint64
 }
 
 type VideoCounters struct {
-	AInPkts   uint64
-	AInBytes  uint64
-	BOutPkts  uint64
-	BOutBytes uint64
-	BInPkts   uint64
-	BInBytes  uint64
-	AOutPkts  uint64
-	AOutBytes uint64
+	AInPkts            uint64
+	AInBytes           uint64
+	BOutPkts           uint64
+	BOutBytes          uint64
+	BInPkts            uint64
+	BInBytes           uint64
+	AOutPkts           uint64
+	AOutBytes          uint64
+	VideoFramesStarted uint64
+	VideoFramesEnded   uint64
 }
 
 type videoProxy struct {
@@ -101,6 +107,7 @@ func (p *videoProxy) loopAIn() {
 		}
 		p.session.videoCounters.aInPkts.Add(1)
 		p.session.videoCounters.aInBytes.Add(uint64(n))
+		p.analyzeFrameBoundaries(buffer[:n])
 		if !p.updateDoorphonePeer(addr) {
 			continue
 		}
@@ -201,13 +208,36 @@ func snapshotVideoCounters(counters *videoCounters) VideoCounters {
 		return VideoCounters{}
 	}
 	return VideoCounters{
-		AInPkts:   counters.aInPkts.Load(),
-		AInBytes:  counters.aInBytes.Load(),
-		BOutPkts:  counters.bOutPkts.Load(),
-		BOutBytes: counters.bOutBytes.Load(),
-		BInPkts:   counters.bInPkts.Load(),
-		BInBytes:  counters.bInBytes.Load(),
-		AOutPkts:  counters.aOutPkts.Load(),
-		AOutBytes: counters.aOutBytes.Load(),
+		AInPkts:            counters.aInPkts.Load(),
+		AInBytes:           counters.aInBytes.Load(),
+		BOutPkts:           counters.bOutPkts.Load(),
+		BOutBytes:          counters.bOutBytes.Load(),
+		BInPkts:            counters.bInPkts.Load(),
+		BInBytes:           counters.bInBytes.Load(),
+		AOutPkts:           counters.aOutPkts.Load(),
+		AOutBytes:          counters.aOutBytes.Load(),
+		VideoFramesStarted: counters.videoFramesStarted.Load(),
+		VideoFramesEnded:   counters.videoFramesEnded.Load(),
+	}
+}
+
+func (p *videoProxy) analyzeFrameBoundaries(packet []byte) {
+	header, ok := rtpfix.ParseRTPHeader(packet)
+	if !ok {
+		return
+	}
+	if header.HeaderLen >= len(packet) {
+		return
+	}
+	payload := packet[header.HeaderLen:]
+	info, ok := rtpfix.ParseH264(payload)
+	if !ok {
+		return
+	}
+	if rtpfix.IsFrameStart(info) {
+		p.session.videoCounters.videoFramesStarted.Add(1)
+	}
+	if rtpfix.IsFrameEnd(info) {
+		p.session.videoCounters.videoFramesEnded.Add(1)
 	}
 }
