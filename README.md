@@ -59,6 +59,10 @@ Delete session:
 curl -s -X DELETE http://127.0.0.1:8080/v1/session/<session_id>
 ```
 
+## OpenAPI
+
+The OpenAPI specification lives at `api/openapi.yaml`. Open the file in Swagger Editor to view and explore the API contract.
+
 ## Checking video marker/timestamp (tshark)
 
 Capture RTP on a specific port and print marker/timestamp:
