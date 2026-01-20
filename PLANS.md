@@ -261,3 +261,4 @@ If Codex is unsure:
 * prefer minimal change
 * prefer local buffering
 * prefer deterministic behavior
+* prefer an approach that is efficient in terms of processor time usage
