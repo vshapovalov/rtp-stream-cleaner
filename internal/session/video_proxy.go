@@ -62,6 +62,8 @@ type videoProxy struct {
 	lastFrameSentTime   time.Time
 	frameTS             uint32
 	frameTSInitialized  bool
+	pendingSPS          []byte
+	pendingPPS          []byte
 }
 
 func newVideoProxy(session *Session, aConn, bConn *net.UDPConn, peerLearningWindow, maxFrameWait time.Duration) *videoProxy {
@@ -255,19 +257,31 @@ func (p *videoProxy) analyzeFrameBoundaries(packet []byte) {
 
 func (p *videoProxy) handleVideoPacket(packet []byte, dest *net.UDPAddr) {
 	info, ok := parseH264Info(packet)
-	if ok && info.IsSlice {
+	if ok {
 		now := time.Now()
-		p.flushOnTimeout(now, dest)
-		if rtpfix.IsFrameStart(info) {
-			if p.frameBufferActive && len(p.frameBuffer) > 0 {
-				p.flushFrameBuffer(now, dest, false)
+		if info.IsSlice {
+			p.flushOnTimeout(now, dest)
+			if rtpfix.IsFrameStart(info) {
+				if p.frameBufferActive && len(p.frameBuffer) > 0 {
+					p.flushFrameBuffer(now, dest, false)
+				}
+				p.startFrameBuffer(now)
+				p.appendPendingToFrameBuffer()
 			}
-			p.startFrameBuffer(now)
+			if p.frameBufferActive {
+				p.bufferFramePacket(packet)
+				if rtpfix.IsFrameEnd(info) {
+					p.flushFrameBuffer(now, dest, false)
+				}
+				return
+			}
 		}
-		if p.frameBufferActive {
-			p.bufferFramePacket(packet)
-			if rtpfix.IsFrameEnd(info) {
-				p.flushFrameBuffer(now, dest, false)
+		if info.IsSPS || info.IsPPS {
+			p.flushOnTimeout(now, dest)
+			if p.frameBufferActive {
+				p.bufferFramePacket(packet)
+			} else {
+				p.storePendingParameterSet(packet, info.IsSPS)
 			}
 			return
 		}
@@ -298,6 +312,27 @@ func (p *videoProxy) bufferFramePacket(packet []byte) {
 	clone := make([]byte, len(packet))
 	copy(clone, packet)
 	p.frameBuffer = append(p.frameBuffer, clone)
+}
+
+func (p *videoProxy) storePendingParameterSet(packet []byte, isSPS bool) {
+	clone := make([]byte, len(packet))
+	copy(clone, packet)
+	if isSPS {
+		p.pendingSPS = clone
+		return
+	}
+	p.pendingPPS = clone
+}
+
+func (p *videoProxy) appendPendingToFrameBuffer() {
+	if p.pendingSPS != nil {
+		p.frameBuffer = append(p.frameBuffer, p.pendingSPS)
+		p.pendingSPS = nil
+	}
+	if p.pendingPPS != nil {
+		p.frameBuffer = append(p.frameBuffer, p.pendingPPS)
+		p.pendingPPS = nil
+	}
 }
 
 func (p *videoProxy) flushOnTimeout(now time.Time, dest *net.UDPAddr) {
