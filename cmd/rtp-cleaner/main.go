@@ -1,12 +1,13 @@
 package main
 
 import (
-	"io"
 	"log"
 	"net/http"
 	"time"
 
+	"rtp-stream-cleaner/internal/api"
 	"rtp-stream-cleaner/internal/config"
+	"rtp-stream-cleaner/internal/session"
 )
 
 func main() {
@@ -19,16 +20,15 @@ func main() {
 		log.Printf("internal_ip=%s", cfg.InternalIP)
 	}
 
+	allocator, err := session.NewPortAllocator(cfg.RTPPortMin, cfg.RTPPortMax)
+	if err != nil {
+		log.Fatalf("failed to init port allocator: %v", err)
+	}
+	manager := session.NewManager(allocator)
+	handler := api.NewHandler(cfg, manager)
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/health", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", http.MethodGet)
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = io.WriteString(w, "ok")
-	})
+	handler.Register(mux)
 
 	server := &http.Server{
 		Addr:              cfg.APIListenAddr,
