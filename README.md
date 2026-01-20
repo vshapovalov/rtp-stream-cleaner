@@ -4,6 +4,22 @@
 
 * [Introduction](INTRODUCTION.md)
 * [Specification](SPEC.md)
+* [Architecture](docs/architecture.md)
+* [Kamailio flow](docs/kamailio-flow.md)
+
+## Quick start
+
+Build binary:
+
+```bash
+go build -o bin/rtp-cleaner ./cmd/rtp-cleaner
+```
+
+Run service:
+
+```bash
+PUBLIC_IP=203.0.113.10 ./bin/rtp-cleaner
+```
 
 ## Environment variables
 
@@ -15,7 +31,47 @@
 | `RTP_PORT_MIN` | `30000` | First port in allocator range. |
 | `RTP_PORT_MAX` | `40000` | Last port in allocator range. |
 | `PEER_LEARNING_WINDOW_SEC` | `10` | Time window to learn/re-learn doorphone peer on audio leg A. |
+| `MAX_FRAME_WAIT_MS` | `120` | Max wait before forcing a video frame flush. |
 | `IDLE_TIMEOUT_SEC` | `60` | Auto-delete sessions after inactivity. |
+
+## API quick reference
+
+Create session:
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/v1/session \
+  -H 'Content-Type: application/json' \
+  -d '{"call_id":"demo","from_tag":"a","to_tag":"b","audio":{"enable":true},"video":{"enable":true,"fix":true}}'
+```
+
+Update session with rtpengine destination:
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/v1/session/<session_id>/update \
+  -H 'Content-Type: application/json' \
+  -d '{"audio":{"rtpengine_dest":"10.0.0.5:40100"},"video":{"rtpengine_dest":"10.0.0.5:40102"}}'
+```
+
+Delete session:
+
+```bash
+curl -s -X DELETE http://127.0.0.1:8080/v1/session/<session_id>
+```
+
+## Checking video marker/timestamp (tshark)
+
+Capture RTP on a specific port and print marker/timestamp:
+
+```bash
+tshark -i any -f "udp port <video_port>" -Y rtp -T fields \
+  -e frame.time_relative -e rtp.seq -e rtp.marker -e rtp.timestamp
+```
+
+Verify marker placement per access unit in a saved pcap:
+
+```bash
+tshark -r capture.pcapng -Y rtp -T fields -e rtp.seq -e rtp.marker -e rtp.timestamp
+```
 
 ## Local UDP passthrough test (audio)
 
@@ -64,3 +120,9 @@ The packet should arrive on the doorphone peer (the host/port that sent the A pa
 ```bash
 socat -u UDP-RECV:<doorphone_port> STDOUT
 ```
+
+## Limitations (POC)
+
+* No RTCP support.
+* No SRTP support.
+* No ICE or NAT traversal beyond comedia on leg A.
