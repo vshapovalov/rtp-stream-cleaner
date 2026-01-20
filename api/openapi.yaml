@@ -1,0 +1,309 @@
+openapi: 3.0.3
+info:
+  title: rtp-cleaner API
+  version: 1.0.0
+  description: HTTP API for rtp-cleaner session control.
+servers:
+  - url: http://127.0.0.1:8080
+    description: Local development
+
+tags:
+  - name: health
+    description: Service health checks
+  - name: session
+    description: RTP session management
+
+paths:
+  /v1/health:
+    get:
+      tags:
+        - health
+      summary: Health check
+      responses:
+        '200':
+          description: OK
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ok
+
+  /v1/session:
+    post:
+      tags:
+        - session
+      summary: Create session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionCreateRequest'
+            examples:
+              create:
+                value:
+                  call_id: demo
+                  from_tag: a
+                  to_tag: b
+                  audio:
+                    enable: true
+                  video:
+                    enable: true
+                    fix: true
+      responses:
+        '200':
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionStateResponse'
+              examples:
+                created:
+                  value:
+                    id: S-123
+                    public_ip: 203.0.113.10
+                    internal_ip: 10.0.0.10
+                    audio:
+                      a_port: 30000
+                      b_port: 30002
+                      rtpengine_dest: ''
+                    video:
+                      a_port: 30004
+                      b_port: 30006
+                      rtpengine_dest: ''
+                    doorphone_peer:
+                      audio: ''
+                      video: ''
+                    counters: {}
+                    created_at: '2024-01-01T12:00:00Z'
+                    last_activity: '2024-01-01T12:00:00Z'
+        '400':
+          description: Bad request or missing PUBLIC_IP
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/session/{id}:
+    get:
+      tags:
+        - session
+      summary: Get session state
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Session state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionStateResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags:
+        - session
+      summary: Delete session
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Deleted (idempotent)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                required:
+                  - ok
+              example:
+                ok: true
+
+  /v1/session/{id}/update:
+    post:
+      tags:
+        - session
+      summary: Update session destinations
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionUpdateRequest'
+            examples:
+              update:
+                value:
+                  audio:
+                    rtpengine_dest: 10.0.0.5:40100
+                  video:
+                    rtpengine_dest: 10.0.0.5:40102
+      responses:
+        '200':
+          description: Updated session state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionStateResponse'
+        '400':
+          description: Invalid destination format
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    SessionCreateRequest:
+      type: object
+      required:
+        - call_id
+        - from_tag
+        - to_tag
+        - audio
+        - video
+      properties:
+        call_id:
+          type: string
+        from_tag:
+          type: string
+        to_tag:
+          type: string
+        audio:
+          $ref: '#/components/schemas/MediaConfigRequest'
+        video:
+          $ref: '#/components/schemas/MediaConfigRequest'
+
+    SessionUpdateRequest:
+      type: object
+      properties:
+        audio:
+          $ref: '#/components/schemas/MediaUpdateRequest'
+        video:
+          $ref: '#/components/schemas/MediaUpdateRequest'
+
+    MediaConfigRequest:
+      type: object
+      required:
+        - enable
+      properties:
+        enable:
+          type: boolean
+        fix:
+          type: boolean
+
+    MediaUpdateRequest:
+      type: object
+      properties:
+        rtpengine_dest:
+          $ref: '#/components/schemas/RtpEngineDest'
+
+    SessionStateResponse:
+      type: object
+      required:
+        - id
+        - public_ip
+        - internal_ip
+        - audio
+        - video
+      properties:
+        id:
+          type: string
+        public_ip:
+          $ref: '#/components/schemas/IPv4'
+        internal_ip:
+          $ref: '#/components/schemas/IPv4'
+        audio:
+          $ref: '#/components/schemas/MediaState'
+        video:
+          $ref: '#/components/schemas/MediaState'
+        doorphone_peer:
+          $ref: '#/components/schemas/DoorphonePeer'
+        counters:
+          $ref: '#/components/schemas/Counters'
+        created_at:
+          type: string
+          format: date-time
+        last_activity:
+          type: string
+          format: date-time
+
+    MediaState:
+      type: object
+      required:
+        - a_port
+        - b_port
+      properties:
+        a_port:
+          $ref: '#/components/schemas/Port'
+        b_port:
+          $ref: '#/components/schemas/Port'
+        rtpengine_dest:
+          $ref: '#/components/schemas/RtpEngineDest'
+
+    DoorphonePeer:
+      type: object
+      properties:
+        audio:
+          type: string
+        video:
+          type: string
+
+    Counters:
+      type: object
+      additionalProperties:
+        type: integer
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+        details:
+          type: string
+
+    IPv4:
+      type: string
+      format: ipv4
+
+    Port:
+      type: integer
+      minimum: 1
+      maximum: 65535
+
+    RtpEngineDest:
+      type: string
+      pattern: '^[0-9.]+:[0-9]+$'
