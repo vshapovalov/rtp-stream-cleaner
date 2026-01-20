@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"log"
 	"net"
@@ -23,6 +24,8 @@ type videoCounters struct {
 	aOutBytes          atomic.Uint64
 	videoFramesStarted atomic.Uint64
 	videoFramesEnded   atomic.Uint64
+	videoFramesFlushed atomic.Uint64
+	videoForcedFlushes atomic.Uint64
 }
 
 type VideoCounters struct {
@@ -36,6 +39,8 @@ type VideoCounters struct {
 	AOutBytes          uint64
 	VideoFramesStarted uint64
 	VideoFramesEnded   uint64
+	VideoFramesFlushed uint64
+	VideoForcedFlushes uint64
 }
 
 type videoProxy struct {
@@ -54,6 +59,9 @@ type videoProxy struct {
 	frameBuffer         [][]byte
 	frameBufferStart    time.Time
 	frameBufferActive   bool
+	lastFrameSentTime   time.Time
+	frameTS             uint32
+	frameTSInitialized  bool
 }
 
 func newVideoProxy(session *Session, aConn, bConn *net.UDPConn, peerLearningWindow, maxFrameWait time.Duration) *videoProxy {
@@ -219,6 +227,8 @@ func snapshotVideoCounters(counters *videoCounters) VideoCounters {
 		AOutBytes:          counters.aOutBytes.Load(),
 		VideoFramesStarted: counters.videoFramesStarted.Load(),
 		VideoFramesEnded:   counters.videoFramesEnded.Load(),
+		VideoFramesFlushed: counters.videoFramesFlushed.Load(),
+		VideoForcedFlushes: counters.videoForcedFlushes.Load(),
 	}
 }
 
@@ -250,14 +260,14 @@ func (p *videoProxy) handleVideoPacket(packet []byte, dest *net.UDPAddr) {
 		p.flushOnTimeout(now, dest)
 		if rtpfix.IsFrameStart(info) {
 			if p.frameBufferActive && len(p.frameBuffer) > 0 {
-				p.flushFrameBuffer(dest)
+				p.flushFrameBuffer(now, dest, false)
 			}
 			p.startFrameBuffer(now)
 		}
 		if p.frameBufferActive {
 			p.bufferFramePacket(packet)
 			if rtpfix.IsFrameEnd(info) {
-				p.flushFrameBuffer(dest)
+				p.flushFrameBuffer(now, dest, false)
 			}
 			return
 		}
@@ -297,18 +307,24 @@ func (p *videoProxy) flushOnTimeout(now time.Time, dest *net.UDPAddr) {
 	if now.Sub(p.frameBufferStart) <= p.maxFrameWait {
 		return
 	}
-	p.flushFrameBuffer(dest)
+	p.flushFrameBuffer(now, dest, true)
 }
 
-func (p *videoProxy) flushFrameBuffer(dest *net.UDPAddr) {
+func (p *videoProxy) flushFrameBuffer(now time.Time, dest *net.UDPAddr, forced bool) {
 	if len(p.frameBuffer) == 0 {
 		p.frameBufferActive = false
 		return
 	}
+	frameTS := p.nextFrameTimestamp(now)
 	last := len(p.frameBuffer) - 1
 	for i, packet := range p.frameBuffer {
 		setMarker(packet, i == last)
+		setTimestamp(packet, frameTS)
 		p.sendPacket(packet, dest)
+	}
+	p.session.videoCounters.videoFramesFlushed.Add(1)
+	if forced {
+		p.session.videoCounters.videoForcedFlushes.Add(1)
 	}
 	p.frameBufferActive = false
 	p.frameBuffer = p.frameBuffer[:0]
@@ -329,6 +345,29 @@ func (p *videoProxy) resetFrameBuffer() {
 	p.frameBufferStart = time.Time{}
 }
 
+func (p *videoProxy) nextFrameTimestamp(now time.Time) uint32 {
+	if !p.frameTSInitialized {
+		header, ok := rtpfix.ParseRTPHeader(p.frameBuffer[0])
+		if ok {
+			p.frameTS = header.TS
+		}
+		p.frameTSInitialized = true
+		p.lastFrameSentTime = now
+		return p.frameTS
+	}
+	dt := now.Sub(p.lastFrameSentTime)
+	if dt < 10*time.Millisecond {
+		dt = 10 * time.Millisecond
+	}
+	if dt > 100*time.Millisecond {
+		dt = 100 * time.Millisecond
+	}
+	increment := uint32((dt.Seconds() * 90000) + 0.5)
+	p.frameTS += increment
+	p.lastFrameSentTime = now
+	return p.frameTS
+}
+
 func setMarker(packet []byte, marker bool) {
 	if len(packet) < 2 {
 		return
@@ -338,4 +377,11 @@ func setMarker(packet []byte, marker bool) {
 		return
 	}
 	packet[1] &^= 0x80
+}
+
+func setTimestamp(packet []byte, timestamp uint32) {
+	if len(packet) < 8 {
+		return
+	}
+	binary.BigEndian.PutUint32(packet[4:8], timestamp)
 }

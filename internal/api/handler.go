@@ -105,6 +105,8 @@ type getSessionResponse struct {
 	VideoAOutBytes     uint64             `json:"video_a_out_bytes"`
 	VideoFramesStarted uint64             `json:"video_frames_started"`
 	VideoFramesEnded   uint64             `json:"video_frames_ended"`
+	VideoFramesFlushed uint64             `json:"video_frames_flushed"`
+	VideoForcedFlushes uint64             `json:"video_forced_flushes"`
 }
 
 type errorResponse struct {
@@ -228,6 +230,8 @@ func (h *Handler) handleSessionGet(w http.ResponseWriter, r *http.Request, id st
 		VideoAOutBytes:     found.VideoCounters.AOutBytes,
 		VideoFramesStarted: found.VideoCounters.VideoFramesStarted,
 		VideoFramesEnded:   found.VideoCounters.VideoFramesEnded,
+		VideoFramesFlushed: found.VideoCounters.VideoFramesFlushed,
+		VideoForcedFlushes: found.VideoCounters.VideoForcedFlushes,
 		Audio: mediaStateResponse{
 			APort:         found.Audio.APort,
 			BPort:         found.Audio.BPort,
@@ -296,6 +300,8 @@ func (h *Handler) handleSessionUpdate(w http.ResponseWriter, r *http.Request, id
 		VideoAOutBytes:     updated.VideoCounters.AOutBytes,
 		VideoFramesStarted: updated.VideoCounters.VideoFramesStarted,
 		VideoFramesEnded:   updated.VideoCounters.VideoFramesEnded,
+		VideoFramesFlushed: updated.VideoCounters.VideoFramesFlushed,
+		VideoForcedFlushes: updated.VideoCounters.VideoForcedFlushes,
 		Audio: mediaStateResponse{
 			APort:         updated.Audio.APort,
 			BPort:         updated.Audio.BPort,
