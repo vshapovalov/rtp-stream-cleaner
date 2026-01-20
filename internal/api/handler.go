@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"rtp-stream-cleaner/internal/config"
 	"rtp-stream-cleaner/internal/session"
@@ -107,6 +108,8 @@ type getSessionResponse struct {
 	VideoFramesEnded   uint64             `json:"video_frames_ended"`
 	VideoFramesFlushed uint64             `json:"video_frames_flushed"`
 	VideoForcedFlushes uint64             `json:"video_forced_flushes"`
+	LastActivity       string             `json:"last_activity"`
+	State              string             `json:"state"`
 }
 
 type errorResponse struct {
@@ -232,6 +235,8 @@ func (h *Handler) handleSessionGet(w http.ResponseWriter, r *http.Request, id st
 		VideoFramesEnded:   found.VideoCounters.VideoFramesEnded,
 		VideoFramesFlushed: found.VideoCounters.VideoFramesFlushed,
 		VideoForcedFlushes: found.VideoCounters.VideoForcedFlushes,
+		LastActivity:       formatTime(found.LastActivity),
+		State:              found.State,
 		Audio: mediaStateResponse{
 			APort:         found.Audio.APort,
 			BPort:         found.Audio.BPort,
@@ -302,6 +307,8 @@ func (h *Handler) handleSessionUpdate(w http.ResponseWriter, r *http.Request, id
 		VideoFramesEnded:   updated.VideoCounters.VideoFramesEnded,
 		VideoFramesFlushed: updated.VideoCounters.VideoFramesFlushed,
 		VideoForcedFlushes: updated.VideoCounters.VideoForcedFlushes,
+		LastActivity:       formatTime(updated.LastActivity),
+		State:              updated.State,
 		Audio: mediaStateResponse{
 			APort:         updated.Audio.APort,
 			BPort:         updated.Audio.BPort,
@@ -350,4 +357,11 @@ func formatDest(addr *net.UDPAddr) string {
 		return ""
 	}
 	return addr.String()
+}
+
+func formatTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339Nano)
 }

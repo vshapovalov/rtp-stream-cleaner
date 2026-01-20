@@ -28,6 +28,7 @@ func main() {
 		allocator,
 		time.Duration(cfg.PeerLearningWindowSec)*time.Second,
 		time.Duration(cfg.MaxFrameWaitMS)*time.Millisecond,
+		time.Duration(cfg.IdleTimeoutSec)*time.Second,
 	)
 	handler := api.NewHandler(cfg, manager)
 

@@ -120,6 +120,7 @@ func (p *videoProxy) loopAIn() {
 			log.Printf("video a leg read failed session=%s err=%v", p.session.ID, err)
 			continue
 		}
+		p.session.markActivity(time.Now())
 		p.session.videoCounters.aInPkts.Add(1)
 		p.session.videoCounters.aInBytes.Add(uint64(n))
 		p.analyzeFrameBoundaries(buffer[:n])
@@ -156,6 +157,7 @@ func (p *videoProxy) loopBIn() {
 			log.Printf("video b leg read failed session=%s err=%v", p.session.ID, err)
 			continue
 		}
+		p.session.markActivity(time.Now())
 		dest := p.session.videoDest.Load()
 		if dest == nil || !dest.IP.Equal(addr.IP) {
 			continue

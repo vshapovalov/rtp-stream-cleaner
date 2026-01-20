@@ -101,6 +101,7 @@ func (p *audioProxy) loopAIn() {
 			log.Printf("audio a leg read failed session=%s err=%v", p.session.ID, err)
 			continue
 		}
+		p.session.markActivity(time.Now())
 		p.session.audioCounters.aInPkts.Add(1)
 		p.session.audioCounters.aInBytes.Add(uint64(n))
 		if !p.updateDoorphonePeer(addr) {
@@ -140,6 +141,7 @@ func (p *audioProxy) loopBIn() {
 			log.Printf("audio b leg read failed session=%s err=%v", p.session.ID, err)
 			continue
 		}
+		p.session.markActivity(time.Now())
 		dest := p.session.audioDest.Load()
 		if dest == nil || !dest.IP.Equal(addr.IP) {
 			continue
