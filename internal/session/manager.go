@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -16,24 +17,30 @@ type Media struct {
 }
 
 type Session struct {
-	ID      string
-	CallID  string
-	FromTag string
-	ToTag   string
-	Audio   Media
-	Video   Media
+	ID            string
+	CallID        string
+	FromTag       string
+	ToTag         string
+	Audio         Media
+	Video         Media
+	AudioCounters AudioCounters
+	audioProxy    *audioProxy
+	audioCounters audioCounters
+	audioDest     atomic.Pointer[net.UDPAddr]
 }
 
 type Manager struct {
-	mu        sync.Mutex
-	sessions  map[string]*Session
-	allocator *PortAllocator
+	mu                 sync.Mutex
+	sessions           map[string]*Session
+	allocator          *PortAllocator
+	peerLearningWindow time.Duration
 }
 
-func NewManager(allocator *PortAllocator) *Manager {
+func NewManager(allocator *PortAllocator, peerLearningWindow time.Duration) *Manager {
 	return &Manager{
-		sessions:  make(map[string]*Session),
-		allocator: allocator,
+		sessions:           make(map[string]*Session),
+		allocator:          allocator,
+		peerLearningWindow: peerLearningWindow,
 	}
 }
 
@@ -56,6 +63,20 @@ func (m *Manager) Create(callID, fromTag, toTag string) (*Session, error) {
 			BPort: ports[3],
 		},
 	}
+	session.audioDest.Store((*net.UDPAddr)(nil))
+
+	aConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: session.Audio.APort})
+	if err != nil {
+		m.allocator.Release(ports)
+		return nil, fmt.Errorf("audio a socket: %w", err)
+	}
+	bConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: session.Audio.BPort})
+	if err != nil {
+		_ = aConn.Close()
+		m.allocator.Release(ports)
+		return nil, fmt.Errorf("audio b socket: %w", err)
+	}
+	session.audioProxy = newAudioProxy(session, aConn, bConn, m.peerLearningWindow)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -66,6 +87,7 @@ func (m *Manager) Create(callID, fromTag, toTag string) (*Session, error) {
 		session.ID = m.generateID()
 	}
 	m.sessions[session.ID] = session
+	session.audioProxy.start()
 	return cloneSession(session), nil
 }
 
@@ -87,7 +109,9 @@ func (m *Manager) UpdateRTPDest(id string, audioDest, videoDest *net.UDPAddr) (*
 		return nil, false
 	}
 	if audioDest != nil {
-		session.Audio.RTPEngineDest = cloneUDPAddr(audioDest)
+		clone := cloneUDPAddr(audioDest)
+		session.Audio.RTPEngineDest = clone
+		session.audioDest.Store(clone)
 	}
 	if videoDest != nil {
 		session.Video.RTPEngineDest = cloneUDPAddr(videoDest)
@@ -105,12 +129,10 @@ func (m *Manager) Delete(id string) bool {
 	if !ok {
 		return false
 	}
-	m.allocator.Release([]int{
-		session.Audio.APort,
-		session.Audio.BPort,
-		session.Video.APort,
-		session.Video.BPort,
-	})
+	if session.audioProxy != nil {
+		session.audioProxy.stop()
+	}
+	m.allocator.Release([]int{session.Audio.APort, session.Audio.BPort, session.Video.APort, session.Video.BPort})
 	return true
 }
 
@@ -129,6 +151,7 @@ func cloneSession(session *Session) *Session {
 	clone := *session
 	clone.Audio = cloneMedia(session.Audio)
 	clone.Video = cloneMedia(session.Video)
+	clone.AudioCounters = snapshotAudioCounters(&session.audioCounters)
 	return &clone
 }
 

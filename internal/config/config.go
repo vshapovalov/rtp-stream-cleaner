@@ -6,20 +6,22 @@ import (
 )
 
 type Config struct {
-	APIListenAddr string
-	PublicIP      string
-	InternalIP    string
-	RTPPortMin    int
-	RTPPortMax    int
+	APIListenAddr         string
+	PublicIP              string
+	InternalIP            string
+	RTPPortMin            int
+	RTPPortMax            int
+	PeerLearningWindowSec int
 }
 
 func Load() Config {
 	return Config{
-		APIListenAddr: getEnv("API_LISTEN_ADDR", "0.0.0.0:8080"),
-		PublicIP:      os.Getenv("PUBLIC_IP"),
-		InternalIP:    os.Getenv("INTERNAL_IP"),
-		RTPPortMin:    getEnvInt("RTP_PORT_MIN", 30000),
-		RTPPortMax:    getEnvInt("RTP_PORT_MAX", 40000),
+		APIListenAddr:         getEnv("API_LISTEN_ADDR", "0.0.0.0:8080"),
+		PublicIP:              os.Getenv("PUBLIC_IP"),
+		InternalIP:            os.Getenv("INTERNAL_IP"),
+		RTPPortMin:            getEnvInt("RTP_PORT_MIN", 30000),
+		RTPPortMax:            getEnvInt("RTP_PORT_MAX", 40000),
+		PeerLearningWindowSec: getEnvInt("PEER_LEARNING_WINDOW_SEC", 10),
 	}
 }
 

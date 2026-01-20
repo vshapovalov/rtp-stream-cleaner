@@ -24,7 +24,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to init port allocator: %v", err)
 	}
-	manager := session.NewManager(allocator)
+	manager := session.NewManager(allocator, time.Duration(cfg.PeerLearningWindowSec)*time.Second)
 	handler := api.NewHandler(cfg, manager)
 
 	mux := http.NewServeMux()
