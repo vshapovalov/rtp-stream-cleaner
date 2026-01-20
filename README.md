@@ -15,6 +15,7 @@
 | `RTP_PORT_MIN` | `30000` | First port in allocator range. |
 | `RTP_PORT_MAX` | `40000` | Last port in allocator range. |
 | `PEER_LEARNING_WINDOW_SEC` | `10` | Time window to learn/re-learn doorphone peer on audio leg A. |
+| `IDLE_TIMEOUT_SEC` | `60` | Auto-delete sessions after inactivity. |
 
 ## Local UDP passthrough test (audio)
 

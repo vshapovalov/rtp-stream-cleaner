@@ -17,20 +17,24 @@ type Media struct {
 }
 
 type Session struct {
-	ID            string
-	CallID        string
-	FromTag       string
-	ToTag         string
-	Audio         Media
-	Video         Media
-	AudioCounters AudioCounters
-	VideoCounters VideoCounters
-	audioProxy    *audioProxy
-	audioCounters audioCounters
-	audioDest     atomic.Pointer[net.UDPAddr]
-	videoProxy    *videoProxy
-	videoCounters videoCounters
-	videoDest     atomic.Pointer[net.UDPAddr]
+	ID               string
+	CallID           string
+	FromTag          string
+	ToTag            string
+	Audio            Media
+	Video            Media
+	LastActivity     time.Time
+	State            string
+	AudioCounters    AudioCounters
+	VideoCounters    VideoCounters
+	audioProxy       *audioProxy
+	audioCounters    audioCounters
+	audioDest        atomic.Pointer[net.UDPAddr]
+	videoProxy       *videoProxy
+	videoCounters    videoCounters
+	videoDest        atomic.Pointer[net.UDPAddr]
+	lastActivityNsec atomic.Int64
+	state            atomic.Int32
 }
 
 type Manager struct {
@@ -39,15 +43,26 @@ type Manager struct {
 	allocator          *PortAllocator
 	peerLearningWindow time.Duration
 	maxFrameWait       time.Duration
+	idleTimeout        time.Duration
+	stopCh             chan struct{}
+	stopOnce           sync.Once
+	wg                 sync.WaitGroup
 }
 
-func NewManager(allocator *PortAllocator, peerLearningWindow, maxFrameWait time.Duration) *Manager {
-	return &Manager{
+func NewManager(allocator *PortAllocator, peerLearningWindow, maxFrameWait, idleTimeout time.Duration) *Manager {
+	manager := &Manager{
 		sessions:           make(map[string]*Session),
 		allocator:          allocator,
 		peerLearningWindow: peerLearningWindow,
 		maxFrameWait:       maxFrameWait,
+		idleTimeout:        idleTimeout,
+		stopCh:             make(chan struct{}),
 	}
+	if idleTimeout > 0 {
+		manager.wg.Add(1)
+		go manager.reapIdleSessions()
+	}
+	return manager
 }
 
 func (m *Manager) Create(callID, fromTag, toTag string) (*Session, error) {
@@ -69,6 +84,8 @@ func (m *Manager) Create(callID, fromTag, toTag string) (*Session, error) {
 			BPort: ports[3],
 		},
 	}
+	session.setState(stateCreated)
+	session.setLastActivity(time.Now())
 	session.audioDest.Store((*net.UDPAddr)(nil))
 	session.videoDest.Store((*net.UDPAddr)(nil))
 
@@ -149,19 +166,14 @@ func (m *Manager) Delete(id string) bool {
 	m.mu.Lock()
 	session, ok := m.sessions[id]
 	if ok {
+		session.setState(stateClosing)
 		delete(m.sessions, id)
 	}
 	m.mu.Unlock()
 	if !ok {
 		return false
 	}
-	if session.audioProxy != nil {
-		session.audioProxy.stop()
-	}
-	if session.videoProxy != nil {
-		session.videoProxy.stop()
-	}
-	m.allocator.Release([]int{session.Audio.APort, session.Audio.BPort, session.Video.APort, session.Video.BPort})
+	m.stopSession(session)
 	return true
 }
 
@@ -178,6 +190,8 @@ func cloneSession(session *Session) *Session {
 		return nil
 	}
 	clone := *session
+	clone.LastActivity = session.lastActivity()
+	clone.State = session.stateString()
 	clone.Audio = cloneMedia(session.Audio)
 	clone.Video = cloneMedia(session.Video)
 	clone.AudioCounters = snapshotAudioCounters(&session.audioCounters)
@@ -200,4 +214,111 @@ func cloneUDPAddr(addr *net.UDPAddr) *net.UDPAddr {
 	}
 	clone := *addr
 	return &clone
+}
+
+func (m *Manager) Close() {
+	m.stopOnce.Do(func() {
+		close(m.stopCh)
+		m.wg.Wait()
+	})
+}
+
+func (m *Manager) reapIdleSessions() {
+	defer m.wg.Done()
+	interval := m.idleTimeout / 2
+	if interval < time.Second {
+		interval = time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			m.removeIdleSessions(time.Now())
+		case <-m.stopCh:
+			return
+		}
+	}
+}
+
+func (m *Manager) removeIdleSessions(now time.Time) {
+	if m.idleTimeout <= 0 {
+		return
+	}
+	var expired []*Session
+	m.mu.Lock()
+	for id, session := range m.sessions {
+		last := session.lastActivity()
+		if last.IsZero() {
+			last = now
+		}
+		if now.Sub(last) >= m.idleTimeout {
+			session.setState(stateClosing)
+			delete(m.sessions, id)
+			expired = append(expired, session)
+		}
+	}
+	m.mu.Unlock()
+	for _, session := range expired {
+		m.stopSession(session)
+	}
+}
+
+func (m *Manager) stopSession(session *Session) {
+	if session == nil {
+		return
+	}
+	if session.audioProxy != nil {
+		session.audioProxy.stop()
+	}
+	if session.videoProxy != nil {
+		session.videoProxy.stop()
+	}
+	m.allocator.Release([]int{session.Audio.APort, session.Audio.BPort, session.Video.APort, session.Video.BPort})
+}
+
+type sessionState int32
+
+const (
+	stateCreated sessionState = iota
+	stateActive
+	stateClosing
+)
+
+func (s sessionState) String() string {
+	switch s {
+	case stateCreated:
+		return "created"
+	case stateActive:
+		return "active"
+	case stateClosing:
+		return "closing"
+	default:
+		return "created"
+	}
+}
+
+func (s *Session) setState(state sessionState) {
+	s.state.Store(int32(state))
+}
+
+func (s *Session) stateString() string {
+	return sessionState(s.state.Load()).String()
+}
+
+func (s *Session) setLastActivity(now time.Time) {
+	s.lastActivityNsec.Store(now.UnixNano())
+}
+
+func (s *Session) lastActivity() time.Time {
+	nsec := s.lastActivityNsec.Load()
+	if nsec == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, nsec).UTC()
+}
+
+func (s *Session) markActivity(now time.Time) {
+	s.lastActivityNsec.Store(now.UnixNano())
+	s.state.CompareAndSwap(int32(stateCreated), int32(stateActive))
 }
