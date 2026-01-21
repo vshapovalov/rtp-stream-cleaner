@@ -1,127 +1,127 @@
-# ТЗ: RTP Cleaner (POC) для Kamailio + rtpengine
+# Spec: RTP Cleaner (POC) for Kamailio + rtpengine
 
-## 0. Контекст и цель
+## 0. Context and goal
 
-Инфраструктура вызова:
+Call infrastructure:
 
 ```
 Doorphone ⇄ Kamailio ⇄ RTP-cleaner ⇄ rtpengine ⇄ WebRTC client
 ```
 
-Проблема: домофон шлёт **H264 over RTP** с некорректными:
+Problem: the doorphone sends **H264 over RTP** with incorrect:
 
-* `marker` (не по access unit),
-* `timestamp` (повторы, немонотонность),
-* SPS/PPS могут приходить вне контекста IDR.
+* `marker` (not aligned to access units),
+* `timestamp` (repeats, non-monotonic),
+* SPS/PPS can arrive outside the IDR context.
 
-Из-за этого WebRTC принимает RTP пакеты, но **декодер дропает кадры**.
+As a result, WebRTC accepts RTP packets but the **decoder drops frames**.
 
-Цель проекта — реализовать **live RTP-cleaner (POC, не production)**, который:
+Project goal: implement a **live RTP-cleaner (POC, not production)** that:
 
-* работает **только в плече домофон ⇄ rtpengine**
-* пропускает **аудио как есть**
-* **чинит только видео RTP**:
+* operates **only on the doorphone ⇄ rtpengine leg**,
+* forwards **audio unchanged**,
+* **fixes video RTP only**:
 
-  * корректные marker по H264 (RFC 6184),
-  * корректные timestamp (монотонные, по кадрам),
-  * корректная привязка SPS/PPS к IDR,
-* работает в условиях **NAT + comedia**,
-* управляется из **Kamailio по HTTP JSON API**.
+  * correct markers per H264 (RFC 6184),
+  * correct timestamps (monotonic, per-frame),
+  * correct association of SPS/PPS with IDR,
+* works behind **NAT + comedia**,
+* is controlled from **Kamailio via an HTTP JSON API**.
 
-Домофон **не поддерживает RTCP**, RTCP полностью игнорируется.
+The doorphone **does not support RTCP**, RTCP is fully ignored.
 
 ---
 
-## 1. Позиция в сигнальном и медиа-флоу
+## 1. Position in signaling and media flow
 
-RTP-cleaner находится **между домофоном и rtpengine**.
+RTP-cleaner sits **between the doorphone and rtpengine**.
 
-WebRTC клиент работает **напрямую с rtpengine**.
+The WebRTC client talks **directly to rtpengine**.
 
-Для каждого media (audio, video) используется **1 UDP порт на поток на каждой ноге**:
+For each media (audio, video) there is **one UDP port per stream on each leg**:
 
 * **leg A (doorphone-facing)**
-  RTP от/к домофону
-  → требуется comedia peer learning
+  RTP to/from the doorphone
+  → requires comedia peer learning
 
 * **leg B (rtpengine-facing)**
-  RTP от/к rtpengine
-  → peer фиксированный, задаётся через API, comedia не используется
+  RTP to/from rtpengine
+  → peer is fixed, provided via API, no comedia
 
-Итого на одну сессию:
+Per session total:
 
 * audio: A_port + B_port
 * video: A_port + B_port
-  **Всего 4 UDP порта на сессию**
+  **Total 4 UDP ports per session**
 
 ---
 
-## 2. SDP и роли Kamailio
+## 2. SDP and Kamailio roles
 
-### SDP к домофону
+### SDP to the doorphone
 
-Kamailio подставляет:
+Kamailio injects:
 
 * `c=` → `PUBLIC_IP`
 * `m=` → `A_port` (audio / video)
 
-### SDP к rtpengine
+### SDP to rtpengine
 
-Kamailio подставляет:
+Kamailio injects:
 
-* IP RTP-cleaner (доступный из rtpengine)
+* RTP-cleaner IP (reachable from rtpengine)
 * `B_port` (audio / video)
 
-`rtpengine_dest`, передаваемый в API, — это **порт rtpengine, который был бы использован напрямую домофоном**, если бы cleaner не существовал.
+`rtpengine_dest` passed to the API is the **rtpengine port that the doorphone would have used directly** if cleaner did not exist.
 
 ---
 
-## 3. NAT / Comedia поведение
+## 3. NAT / Comedia behavior
 
 ### Leg A (doorphone-facing)
 
-* слушает UDP `A_port`
-* `doorphone_peer` неизвестен до первого пакета
-* при первом RTP пакете:
+* listens on UDP `A_port`
+* `doorphone_peer` is unknown until the first packet
+* on first RTP packet:
 
   ```
   doorphone_peer = srcIP:srcPort
   ```
-* разрешено переобучение peer только в первые
+* peer relearning is allowed only during the first
   `PEER_LEARNING_WINDOW_SEC` (default 10s)
-* обратный трафик (B → A) отправляется **только если peer известен**
-* если peer неизвестен — пакеты B → A дропаются
+* reverse traffic (B → A) is sent **only if the peer is known**
+* if the peer is unknown — B → A packets are dropped
 
 ### Leg B (rtpengine-facing)
 
-* `rtpengine_dest` задаётся через API (`ip:port`)
-* отправка **всегда** на `rtpengine_dest`
-* входящие пакеты принимаются **только от rtpengine_dest.ip**
-  (порт можно не проверять жёстко из-за NAT)
-* **никакого peer learning**
+* `rtpengine_dest` is provided via API (`ip:port`)
+* send **always** to `rtpengine_dest`
+* incoming packets are accepted **only from rtpengine_dest.ip**
+  (port can be loosely checked because of NAT)
+* **no peer learning**
 
-### Важное требование
+### Important requirement
 
-* Отправка RTP **должна идти с того же UDP socket**, который слушает соответствующий порт
-  (важно для comedia у rtpengine).
+* RTP sending **must use the same UDP socket** that listens on that port
+  (required for comedia in rtpengine).
 
 ---
 
-## 4. Транспорт
+## 4. Transport
 
 * UDP only
 * RTP only
-* RTCP **не реализуется**, не резервируется `RTP+1`
-* SRTP не используется
+* RTCP **is not implemented**, `RTP+1` is not reserved
+* SRTP is not used
 
 ---
 
-## 5. API управления (HTTP JSON)
+## 5. Control API (HTTP JSON)
 
-Управление осуществляется из Kamailio через:
+Control is done from Kamailio via:
 
-* `http_async_client`, либо
-* любой HTTP/exec модуль (curl допустим для POC)
+* `http_async_client`, or
+* any HTTP/exec module (curl is acceptable for a POC)
 
 ### 5.1 Create session
 
@@ -149,7 +149,7 @@ Response:
 }
 ```
 
-### 5.2 Update session (назначение rtpengine)
+### 5.2 Update session (assign rtpengine)
 
 `POST /v1/session/{id}/update`
 
@@ -167,120 +167,120 @@ Response:
 ### 5.4 Observability
 
 * `GET /v1/health`
-* `GET /v1/session/{id}` — текущее состояние, порты, peer, counters
+* `GET /v1/session/{id}` — current state, ports, peer, counters
 
 ---
 
-## 6. Аллокация портов
+## 6. Port allocation
 
-Конфиг:
+Config:
 
 * `RTP_PORT_MIN` (default 30000)
 * `RTP_PORT_MAX` (default 40000)
 
-Требования:
+Requirements:
 
-* порты выделяются без конфликтов
-* освобождаются при delete или по idle timeout
+* allocate ports without conflicts
+* release on delete or idle timeout
 
 ---
 
-## 7. Таймауты и GC
+## 7. Timeouts and GC
 
 * `IDLE_TIMEOUT_SEC` (default 60s):
-  нет RTP → сессия удаляется
+  no RTP → session removed
 * `MAX_FRAME_WAIT_MS` (default 120ms):
-  если кадр не завершился — forced flush
+  if a frame does not complete — forced flush
 * `PEER_LEARNING_WINDOW_SEC` (default 10s)
 
 ---
 
-## 8. Видео-фикс (H264 over RTP)
+## 8. Video fix (H264 over RTP)
 
-Фикс применяется **только** на направлении **video A → B**.
+Fix applies **only** on **video A → B** direction.
 
-### 8.1 Распознавание
+### 8.1 Detection
 
-Поддержать:
+Support:
 
 * Single NAL (types 1, 5)
 * FU-A (type 28)
 * SPS/PPS (types 7, 8)
 
-Если payload не распознан как H264 — пакет проксируется как есть.
+If the payload is not recognized as H264 — proxy the packet as-is.
 
 ### 8.2 Marker
 
-* `marker = 1` **только** на последнем RTP пакете access unit
-* FU-A → пакет с FU-End
-* Single NAL slice → сам пакет
-* SPS/PPS → marker всегда `0`
+* `marker = 1` **only** on the last RTP packet of an access unit
+* FU-A → packet with FU-End
+* Single NAL slice → the packet itself
+* SPS/PPS → marker always `0`
 
 ### 8.3 Timestamp (live)
 
-Timestamp генерируется **по wallclock**, а не по входящему RTP.
+Timestamp is generated **from wallclock**, not from inbound RTP.
 
-Алгоритм:
+Algorithm:
 
-* при завершении кадра:
+* on frame completion:
 
   ```
   dt = now - last_frame_sent_time
   dt = clamp(dt, 10ms, 100ms)
   frameTS += round(dt * 90000)
   ```
-* все пакеты кадра получают одинаковый `frameTS`
-* SPS/PPS, относящиеся к кадру, получают `frameTS`
+* all packets of the frame share the same `frameTS`
+* SPS/PPS belonging to the frame get `frameTS`
 
 ### 8.4 SPS/PPS pending + cache
 
-* SPS/PPS, пришедшие **вне кадра**, не отправляются сразу
-* они сохраняются как `pending`
-* при старте следующего кадра:
+* SPS/PPS arriving **outside a frame** are not sent immediately
+* they are stored as `pending`
+* at the start of the next frame:
 
-  * pending SPS/PPS отправляются **перед кадром** с timestamp кадра
-* если кадр IDR и pending нет:
+  * pending SPS/PPS are sent **before the frame** with the frame timestamp
+* if the frame is IDR and pending is empty:
 
-  * допускается (опционально) инжект cached SPS/PPS
-    (по умолчанию выключено, см. флаг)
+  * optionally inject cached SPS/PPS
+    (disabled by default; see flag)
 
 ### 8.5 Forced flush
 
-Если кадр начат, но не завершён за `MAX_FRAME_WAIT_MS`:
+If a frame started but does not complete within `MAX_FRAME_WAIT_MS`:
 
-* flush текущего буфера
-* marker=1 на последнем пакете
-* timestamp = текущий frameTS
-* увеличить счётчик `forced_flushes`
+* flush the current buffer
+* marker=1 on the last packet
+* timestamp = current frameTS
+* increment `forced_flushes`
 
 ### 8.6 Sequence numbers
 
 POC baseline:
 
-* sequence numbers **не изменяются**
-* SPS/PPS injection по умолчанию **без добавления новых RTP пакетов**
+* sequence numbers **are not modified**
+* SPS/PPS injection by default **does not add new RTP packets**
 
-Опционально (future):
+Optional (future):
 
-* разрешить injection с renumbering seq
-
----
-
-## 9. Аудио
-
-* проксируется A ↔ B без изменений
-* comedia только на leg A
-* RTCP не используется
+* allow injection with sequence renumbering
 
 ---
 
-## 10. Логи и метрики (POC)
+## 9. Audio
 
-Логи:
+* proxied A ↔ B without changes
+* comedia only on leg A
+* RTCP is not used
 
-* create / update / delete сессий
+---
+
+## 10. Logs and metrics (POC)
+
+Logs:
+
+* create / update / delete sessions
 * peer learned
-* ошибки UDP send/recv
+* UDP send/recv errors
 * video forced flush
 
 Counters per session:
@@ -292,12 +292,12 @@ Counters per session:
 
 ---
 
-## 11. Технологии и структура
+## 11. Technology and structure
 
 * Go ≥ 1.22
 * `net/http`, `net`
-* без декодирования H264
-* структура проекта:
+* no H264 decoding
+* project structure:
 
 ```
 cmd/rtp-cleaner/
@@ -311,11 +311,11 @@ docs/
 
 ---
 
-## 12. Конфигурация (env)
+## 12. Configuration (env)
 
 * `API_LISTEN_ADDR` (default `0.0.0.0:8080`)
-* `PUBLIC_IP` (обязателен)
-* `INTERNAL_IP` (если не задан, используется `PUBLIC_IP`)
+* `PUBLIC_IP` (required)
+* `INTERNAL_IP` (if not set, `PUBLIC_IP` is used)
 * `RTP_PORT_MIN`, `RTP_PORT_MAX`
 * `IDLE_TIMEOUT_SEC`
 * `MAX_FRAME_WAIT_MS`
@@ -326,59 +326,59 @@ docs/
 
 ## 13. Definition of Done
 
-POC считается готовым, если:
+The POC is considered done when:
 
-1. API create/update/delete работает
-2. Kamailio успешно переписывает SDP
-3. RTP проходит:
+1. API create/update/delete works
+2. Kamailio successfully rewrites SDP
+3. RTP passes through:
 
-   * audio без изменений
-   * video декодируется в WebRTC (`framesDecoded > 0`)
-4. Дополнительная задержка ≤ ~150ms
-5. Нет зависаний при потере FU-A End
+   * audio unchanged
+   * video decodes in WebRTC (`framesDecoded > 0`)
+4. Additional latency ≤ ~150ms
+5. No hangs when FU-A End is lost
 
 ---
 
-## Анализ и декомпозиция на подзадачи
+## Analysis and task decomposition
 
-1. **Каркас сервиса и конфигурация**
-   - Инициализировать CLI/entrypoint `cmd/rtp-cleaner` и структуру пакетов.
-   - Реализовать загрузку env-конфигурации и валидацию обязательных параметров.
-   - Подготовить базовое логирование.
+1. **Service skeleton and configuration**
+   - Initialize CLI/entrypoint `cmd/rtp-cleaner` and package structure.
+   - Implement env configuration loading and validate required parameters.
+   - Prepare basic logging.
 
-2. **HTTP API управления**
-   - Реализовать эндпоинты create/update/delete/health/get-session.
-   - Описать модель сессии (ID, порты, peer, counters, состояние).
-   - Добавить валидацию входных JSON и формирование ответов.
+2. **HTTP control API**
+   - Implement create/update/delete/health/get-session endpoints.
+   - Define the session model (ID, ports, peer, counters, state).
+   - Add JSON input validation and response formatting.
 
-3. **Аллокация портов и управление жизненным циклом**
-   - Реализовать безопасный выделитель портов в диапазоне.
-   - Освобождение портов при delete/idle timeout.
-   - Фоновая GC-задача с тайм-аутами.
+3. **Port allocation and lifecycle management**
+   - Implement a safe allocator within the range.
+   - Release ports on delete/idle timeout.
+   - Background GC task with timeouts.
 
-4. **UDP слой и NAT/comedia для leg A**
-   - Открытие UDP сокетов на A/B портах.
-   - Peer learning для leg A с ограничением окна.
-   - Отправка RTP с того же сокета, что и приём.
+4. **UDP layer and NAT/comedia for leg A**
+   - Open UDP sockets on A/B ports.
+   - Peer learning for leg A with a bounded window.
+   - Send RTP from the same socket used to receive.
 
-5. **Маршрутизация RTP A ↔ B**
-   - Прокси аудио A↔B без изменений.
-   - Видеопоток: A→B через rtpfix, B→A как есть.
-   - Фильтрация входящих пакетов leg B по IP rtpengine.
+5. **RTP routing A ↔ B**
+   - Proxy audio A↔B unchanged.
+   - Video stream: A→B through rtpfix, B→A as-is.
+   - Filter incoming leg B packets by rtpengine IP.
 
-6. **RTP fix для H264 видео**
-   - Парсинг RTP заголовка и H264 payload (Single NAL, FU-A, SPS/PPS).
-   - Коррекция marker по границам access unit.
-   - Генерация timestamp по wallclock.
-   - Pending SPS/PPS, cache и опциональный inject.
-   - Forced flush по таймеру.
+6. **RTP fix for H264 video**
+   - Parse RTP headers and H264 payloads (Single NAL, FU-A, SPS/PPS).
+   - Correct marker on access unit boundaries.
+   - Generate timestamps from wallclock.
+   - Pending SPS/PPS, cache, and optional inject.
+   - Forced flush on timer.
 
-7. **Метрики и наблюдаемость**
-   - Счётчики pkts/bytes по направлениям.
-   - Счётчики video_frames_flushed и video_forced_flushes.
-   - Экспорт состояния через GET /v1/session/{id}.
+7. **Metrics and observability**
+   - Counters for pkts/bytes by direction.
+   - Counters for video_frames_flushed and video_forced_flushes.
+   - Expose state via GET /v1/session/{id}.
 
-8. **Документация и готовность POC**
-   - Описать expected flow для Kamailio + rtpengine.
-   - Проверить Definition of Done и критерии готовности.
-   - Добавить notes по ограничениям (RTCP/SRTP отсутствуют).
+8. **Documentation and POC readiness**
+   - Document expected flow for Kamailio + rtpengine.
+   - Check Definition of Done and readiness criteria.
+   - Add notes on limitations (no RTCP/SRTP).
