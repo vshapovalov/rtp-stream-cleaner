@@ -67,9 +67,9 @@ func OpenReader(path string) (*Reader, error) {
 		}
 		return &Reader{file: file, isPcapng: true, ngIfaces: make(map[uint32]ngInterface)}, nil
 	case pcapMagicLittle, pcapMagicBig:
-		var bo binary.ByteOrder = binary.LittleEndian
+		var bo binary.ByteOrder = binary.BigEndian
 		if magic == pcapMagicBig {
-			bo = binary.BigEndian
+			bo = binary.LittleEndian
 		}
 		reader := &Reader{file: file, byteOrder: bo}
 		if err := reader.readPcapHeader(); err != nil {
@@ -126,6 +126,9 @@ func (r *Reader) nextPcap() (Packet, error) {
 	inclLen := r.byteOrder.Uint32(hdr[8:12])
 	data := make([]byte, inclLen)
 	if _, err := io.ReadFull(r.file, data); err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return Packet{}, io.EOF
+		}
 		return Packet{}, fmt.Errorf("read pcap record data: %w", err)
 	}
 	ts := time.Unix(int64(tsSec), int64(tsUsec)*1000)
