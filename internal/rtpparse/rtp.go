@@ -4,8 +4,9 @@ import "fmt"
 
 // Packet represents a minimally parsed RTP packet.
 type Packet struct {
-	SSRC       uint32
-	HeaderSize int
+	SSRC        uint32
+	PayloadType uint8
+	HeaderSize  int
 }
 
 // Parse inspects payload and returns RTP metadata when it looks like RTP.
@@ -33,6 +34,7 @@ func Parse(payload []byte) (Packet, error) {
 			return Packet{}, fmt.Errorf("rtp extension data truncated")
 		}
 	}
+	payloadType := payload[1] & 0x7f
 	ssrc := uint32(payload[8])<<24 | uint32(payload[9])<<16 | uint32(payload[10])<<8 | uint32(payload[11])
-	return Packet{SSRC: ssrc, HeaderSize: headerSize}, nil
+	return Packet{SSRC: ssrc, PayloadType: payloadType, HeaderSize: headerSize}, nil
 }

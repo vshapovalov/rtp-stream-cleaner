@@ -163,3 +163,11 @@ rtpengine-style receive-only example:
   --recv-pcap out_rtpengine_recv.pcap \
   --duration 10
 ```
+
+List RTP sources in a PCAP file:
+
+```bash
+./rtppeer \
+  --send-pcap testdata/doorphone_broken_av.pcap \
+  --list-sources
+```

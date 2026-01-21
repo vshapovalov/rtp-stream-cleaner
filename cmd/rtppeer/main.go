@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -48,18 +49,19 @@ type stats struct {
 }
 
 type config struct {
-	bindIP    string
-	audioPort int
-	videoPort int
-	audioTo   string
-	videoTo   string
-	audioSSRC uint32
-	videoSSRC uint32
-	sendPCAP  string
-	recvPCAP  string
-	pacing    pacingConfig
-	duration  time.Duration
-	verbose   bool
+	bindIP      string
+	audioPort   int
+	videoPort   int
+	audioTo     string
+	videoTo     string
+	audioSSRC   uint32
+	videoSSRC   uint32
+	sendPCAP    string
+	recvPCAP    string
+	pacing      pacingConfig
+	duration    time.Duration
+	verbose     bool
+	listSources bool
 }
 
 func main() {
@@ -85,6 +87,7 @@ func parseFlags(args []string) (config, error) {
 	flags.StringVar(&cfg.videoTo, "video-to", "", "Video destination ip:port")
 	flags.StringVar(&cfg.sendPCAP, "send-pcap", "", "PCAP file to replay")
 	flags.StringVar(&cfg.recvPCAP, "recv-pcap", "", "PCAP file to write")
+	flags.BoolVar(&cfg.listSources, "list-sources", false, "List RTP SSRCs and payload types in send-pcap and exit")
 	pacingRaw := flags.String("pacing", "capture", "Pacing mode: capture, fast, fixed:<ms>")
 	audioSSRC := flags.String("audio-ssrc", "", "Audio RTP SSRC (hex or decimal)")
 	videoSSRC := flags.String("video-ssrc", "", "Video RTP SSRC (hex or decimal)")
@@ -94,24 +97,30 @@ func parseFlags(args []string) (config, error) {
 	if err := flags.Parse(args); err != nil {
 		return cfg, err
 	}
-	if cfg.audioPort == 0 || cfg.videoPort == 0 {
-		return cfg, errors.New("audio-port and video-port are required")
-	}
-	if cfg.sendPCAP != "" {
-		if cfg.audioTo == "" || cfg.videoTo == "" {
-			return cfg, errors.New("audio-to and video-to are required when send-pcap is set")
+	if cfg.listSources {
+		if cfg.sendPCAP == "" {
+			return cfg, errors.New("send-pcap is required when list-sources is set")
 		}
-		if *audioSSRC == "" || *videoSSRC == "" {
-			return cfg, errors.New("audio-ssrc and video-ssrc are required when send-pcap is set")
+	} else {
+		if cfg.audioPort == 0 || cfg.videoPort == 0 {
+			return cfg, errors.New("audio-port and video-port are required")
 		}
-		var err error
-		cfg.audioSSRC, err = parseSSRC(*audioSSRC)
-		if err != nil {
-			return cfg, fmt.Errorf("invalid audio-ssrc: %w", err)
-		}
-		cfg.videoSSRC, err = parseSSRC(*videoSSRC)
-		if err != nil {
-			return cfg, fmt.Errorf("invalid video-ssrc: %w", err)
+		if cfg.sendPCAP != "" {
+			if cfg.audioTo == "" || cfg.videoTo == "" {
+				return cfg, errors.New("audio-to and video-to are required when send-pcap is set")
+			}
+			if *audioSSRC == "" || *videoSSRC == "" {
+				return cfg, errors.New("audio-ssrc and video-ssrc are required when send-pcap is set")
+			}
+			var err error
+			cfg.audioSSRC, err = parseSSRC(*audioSSRC)
+			if err != nil {
+				return cfg, fmt.Errorf("invalid audio-ssrc: %w", err)
+			}
+			cfg.videoSSRC, err = parseSSRC(*videoSSRC)
+			if err != nil {
+				return cfg, fmt.Errorf("invalid video-ssrc: %w", err)
+			}
 		}
 	}
 	cfg.duration = time.Duration(durationSec) * time.Second
@@ -161,6 +170,9 @@ func parsePacing(value string) (pacingConfig, error) {
 }
 
 func run(cfg config) error {
+	if cfg.listSources {
+		return listSources(cfg.sendPCAP)
+	}
 	bindIP := net.ParseIP(cfg.bindIP)
 	if bindIP == nil {
 		return fmt.Errorf("invalid bind-ip: %s", cfg.bindIP)
@@ -394,6 +406,58 @@ func printSummary(stats *stats) {
 	fmt.Printf("bytes_sent=%d\n", atomic.LoadInt64(&stats.sentBytes))
 	fmt.Printf("bytes_recv=%d\n", atomic.LoadInt64(&stats.recvBytes))
 	fmt.Printf("errors=%d\n", atomic.LoadInt64(&stats.parseErrors)+atomic.LoadInt64(&stats.sendErrors))
+}
+
+func listSources(pcapPath string) error {
+	reader, err := pcapio.OpenReader(pcapPath)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+
+	type payloadSet map[uint8]struct{}
+	sources := make(map[uint32]payloadSet)
+	for {
+		packet, err := reader.Next()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return err
+		}
+		udpPayload, err := extractUDPPayload(packet.Data, reader.LinkType())
+		if err != nil || len(udpPayload) == 0 {
+			continue
+		}
+		rtpPacket, err := rtpparse.Parse(udpPayload)
+		if err != nil {
+			continue
+		}
+		payloadTypes, ok := sources[rtpPacket.SSRC]
+		if !ok {
+			payloadTypes = make(payloadSet)
+			sources[rtpPacket.SSRC] = payloadTypes
+		}
+		payloadTypes[rtpPacket.PayloadType] = struct{}{}
+	}
+
+	ssrcs := make([]uint32, 0, len(sources))
+	for ssrc := range sources {
+		ssrcs = append(ssrcs, ssrc)
+	}
+	sort.Slice(ssrcs, func(i, j int) bool { return ssrcs[i] < ssrcs[j] })
+	for _, ssrc := range ssrcs {
+		payloadTypes := sources[ssrc]
+		payloadList := make([]int, 0, len(payloadTypes))
+		for pt := range payloadTypes {
+			payloadList = append(payloadList, int(pt))
+		}
+		sort.Ints(payloadList)
+		for _, pt := range payloadList {
+			fmt.Printf("ssrc=0x%08x payload_type=%d\n", ssrc, pt)
+		}
+	}
+	return nil
 }
 
 func extractUDPPayload(frame []byte, linkType uint32) ([]byte, error) {
