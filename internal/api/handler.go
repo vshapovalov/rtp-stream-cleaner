@@ -46,8 +46,8 @@ type createSessionRequest struct {
 		Enable bool `json:"enable"`
 	} `json:"audio"`
 	Video struct {
-		Enable bool `json:"enable"`
-		Fix    bool `json:"fix"`
+		Enable bool  `json:"enable"`
+		Fix    *bool `json:"fix"`
 	} `json:"video"`
 }
 
@@ -144,7 +144,12 @@ func (h *Handler) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid json body"})
 		return
 	}
-	created, err := h.manager.Create(req.CallID, req.FromTag, req.ToTag)
+	// Default to true when omitted to preserve legacy behavior (video fix enabled).
+	videoFix := true
+	if req.Video.Fix != nil {
+		videoFix = *req.Video.Fix
+	}
+	created, err := h.manager.Create(req.CallID, req.FromTag, req.ToTag, videoFix)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, session.ErrNoPortsAvailable) {

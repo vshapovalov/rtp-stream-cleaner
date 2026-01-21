@@ -67,7 +67,7 @@ func NewManager(allocator *PortAllocator, peerLearningWindow, maxFrameWait, idle
 	return manager
 }
 
-func (m *Manager) Create(callID, fromTag, toTag string) (*Session, error) {
+func (m *Manager) Create(callID, fromTag, toTag string, videoFix bool) (*Session, error) {
 	ports, err := m.allocator.Allocate(4)
 	if err != nil {
 		return nil, err
@@ -118,7 +118,7 @@ func (m *Manager) Create(callID, fromTag, toTag string) (*Session, error) {
 		return nil, fmt.Errorf("video b socket: %w", err)
 	}
 	session.audioProxy = newAudioProxy(session, aConn, bConn, m.peerLearningWindow)
-	session.videoProxy = newVideoProxy(session, videoAConn, videoBConn, m.peerLearningWindow, m.maxFrameWait, m.videoInjectCachedSPSPPS)
+	session.videoProxy = newVideoProxy(session, videoAConn, videoBConn, m.peerLearningWindow, m.maxFrameWait, videoFix, m.videoInjectCachedSPSPPS)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
