@@ -461,20 +461,36 @@ func listSources(pcapPath string) error {
 }
 
 func extractUDPPayload(frame []byte, linkType uint32) ([]byte, error) {
-	if linkType != 1 {
+	var etherType uint16
+	offset := 0
+	switch linkType {
+	case 1:
+		if len(frame) < 14 {
+			return nil, fmt.Errorf("frame too short")
+		}
+		etherType = binary.BigEndian.Uint16(frame[12:14])
+		offset = 14
+	case 113:
+		if len(frame) < 16 {
+			return nil, fmt.Errorf("frame too short")
+		}
+		etherType = binary.BigEndian.Uint16(frame[14:16])
+		offset = 16
+	case 276:
+		if len(frame) < 20 {
+			return nil, fmt.Errorf("frame too short")
+		}
+		etherType = binary.BigEndian.Uint16(frame[0:2])
+		offset = 20
+	default:
 		return nil, fmt.Errorf("unsupported linktype: %d", linkType)
 	}
-	if len(frame) < 14 {
-		return nil, fmt.Errorf("frame too short")
-	}
-	etherType := binary.BigEndian.Uint16(frame[12:14])
-	offset := 14
 	if etherType == 0x8100 {
-		if len(frame) < 18 {
+		if len(frame) < offset+4 {
 			return nil, fmt.Errorf("frame too short for vlan")
 		}
-		etherType = binary.BigEndian.Uint16(frame[16:18])
-		offset = 18
+		etherType = binary.BigEndian.Uint16(frame[offset+2 : offset+4])
+		offset += 4
 	}
 	if etherType != 0x0800 {
 		return nil, fmt.Errorf("unsupported ethertype: 0x%x", etherType)
