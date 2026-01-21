@@ -77,15 +77,23 @@ type createSessionResponse struct {
 }
 
 type sessionStateResponse struct {
-	ID         string             `json:"id"`
-	CallID     string             `json:"call_id"`
-	FromTag    string             `json:"from_tag"`
-	ToTag      string             `json:"to_tag"`
-	PublicIP   string             `json:"public_ip"`
-	InternalIP string             `json:"internal_ip"`
-	Audio      mediaStateResponse `json:"audio"`
-	Video      mediaStateResponse `json:"video"`
-	State      string             `json:"state"`
+	ID            string             `json:"id"`
+	CallID        string             `json:"call_id"`
+	FromTag       string             `json:"from_tag"`
+	ToTag         string             `json:"to_tag"`
+	PublicIP      string             `json:"public_ip"`
+	InternalIP    string             `json:"internal_ip"`
+	Audio         mediaStateResponse `json:"audio"`
+	Video         mediaStateResponse `json:"video"`
+	AudioAInPkts  uint64             `json:"audio_a_in_pkts"`
+	AudioBOutPkts uint64             `json:"audio_b_out_pkts"`
+	AudioBInPkts  uint64             `json:"audio_b_in_pkts"`
+	AudioAOutPkts uint64             `json:"audio_a_out_pkts"`
+	VideoAInPkts  uint64             `json:"video_a_in_pkts"`
+	VideoBOutPkts uint64             `json:"video_b_out_pkts"`
+	VideoBInPkts  uint64             `json:"video_b_in_pkts"`
+	VideoAOutPkts uint64             `json:"video_a_out_pkts"`
+	State         string             `json:"state"`
 }
 
 type portResponse struct {
