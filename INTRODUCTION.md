@@ -1,150 +1,150 @@
-Да, **очень правильная мысль** 👍
-Такой “пролог” реально нужен — он резко повышает шанс, что Codex **правильно интерпретирует ТЗ**, а не начнёт оптимизировать не туда или упрощать критичные моменты.
+Yes, **this is a very good idea** 👍
+A short “prologue” like this really helps Codex **interpret the spec correctly** instead of optimizing the wrong things or simplifying critical details.
 
-Ниже — **готовый пролог**, который можно поставить **перед ТЗ**, как `INTRODUCTION.md` или верхний раздел `SPEC.md`.
-
----
-
-# Пролог / Контекст проекта RTP Cleaner
-
-## Зачем существует этот проект
-
-Этот проект — **proof-of-concept (POC)** сервиса, который чинит **некорректный RTP видеопоток (H264)** в реальном времени.
-
-Источник потока — **домофон**, который:
-
-* шлёт H264 over RTP,
-* **нарушает RFC 6184**,
-* из-за чего **WebRTC клиенты принимают RTP, но дропают видео**.
-
-Проект **не является продакшен-решением**, его цель:
-
-* доказать, что поток можно починить “на лету”,
-* и интегрировать это в существующую SIP/WebRTC инфраструктуру **без переписывания rtpengine или Kamailio**.
+Below is a **ready-to-use prologue** you can place **before the spec**, either as `INTRODUCTION.md` or as the top section of `SPEC.md`.
 
 ---
 
-## Где сервис стоит в инфраструктуре
+# Prologue / Context for the RTP Cleaner Project
 
-Типичный вызов:
+## Why this project exists
+
+This project is a **proof-of-concept (POC)** service that repairs **incorrect RTP video (H264)** in real time.
+
+The source is a **doorphone** that:
+
+* sends H264 over RTP,
+* **violates RFC 6184**,
+* and as a result **WebRTC clients receive RTP but drop the video**.
+
+This project is **not a production solution**. Its goals are:
+
+* to prove the stream can be fixed “on the fly”,
+* and to integrate this into an existing SIP/WebRTC stack **without rewriting rtpengine or Kamailio**.
+
+---
+
+## Where the service sits in the infrastructure
+
+Typical call path:
 
 ```
 Doorphone ⇄ Kamailio ⇄ RTP-cleaner ⇄ rtpengine ⇄ WebRTC client
 ```
 
-* RTP-cleaner вставляется **только между домофоном и rtpengine**
-* WebRTC клиент **никогда не работает с RTP-cleaner напрямую**
-* RTP-cleaner не знает ничего о SIP, SDP или WebRTC логике — только RTP
+* RTP-cleaner is inserted **only between the doorphone and rtpengine**.
+* The WebRTC client **never talks to RTP-cleaner directly**.
+* RTP-cleaner knows nothing about SIP, SDP, or WebRTC logic — only RTP.
 
 ---
 
-## В чём именно была проблема RTP
+## What exactly was wrong with the RTP stream
 
-При анализе реальных дампов (pcap) выяснилось:
+From analysis of real packet captures (pcap), we saw:
 
 ### 1) Marker bit
 
-* marker (`M=1`) выставлялся:
+* marker (`M=1`) was set:
 
-  * на SPS/PPS,
-  * в середине кадра,
-  * несколько раз в одном access unit
-* WebRTC **строго ожидает marker только на последнем RTP пакете кадра**
+  * on SPS/PPS,
+  * in the middle of a frame,
+  * multiple times within one access unit
+* WebRTC **expects marker only on the last RTP packet of a frame**
 
 ### 2) Timestamp
 
-* одинаковые RTP timestamps использовались:
+* the same RTP timestamps were used:
 
-  * для разных кадров,
-  * для SPS/PPS и предыдущего non-IDR кадра
-* это **недопустимо для WebRTC** и приводит к drop’у кадров
+  * for different frames,
+  * for SPS/PPS and the previous non-IDR frame
+* this is **invalid for WebRTC** and causes dropped frames
 
-### 3) SPS/PPS и IDR
+### 3) SPS/PPS and IDR
 
-* SPS/PPS могли приходить:
+* SPS/PPS could arrive:
 
-  * “между кадрами”,
-  * с timestamp предыдущего кадра
-* WebRTC не может сопоставить такие SPS/PPS с последующим IDR и **не начинает декодирование**
-
----
-
-## Как проблема была воспроизведена и доказана
-
-Для анализа использовался оффлайн подход:
-
-1. Из проблемного pcap был извлечён H264 elementary stream
-2. Этот поток был повторно отправлен как RTP через ffmpeg
-3. Новый pcap показал:
-
-   * корректные marker
-   * корректные timestamp
-4. Такой RTP **успешно декодировался WebRTC клиентом**
-
-Далее была написана CLI-утилита, которая:
-
-* читала pcap,
-* чинила marker/timestamp/SPS-PPS,
-* генерировала “исправленный” pcap,
-* и подтверждала, что WebRTC начинает декодирование.
-
-Live-сервис является **прямым развитием этой оффлайн логики**.
+  * “between frames”,
+  * with the previous frame’s timestamp
+* WebRTC cannot match these SPS/PPS with the next IDR and **never starts decoding**
 
 ---
 
-## Что именно делает RTP-cleaner
+## How the problem was reproduced and proven
 
-RTP-cleaner **не декодирует видео** и **не меняет кодек**.
+We used an offline workflow:
 
-Он делает только следующее:
+1. Extracted an H264 elementary stream from a problematic pcap
+2. Re-sent that stream as RTP via ffmpeg
+3. The new pcap showed:
 
-* собирает RTP пакеты в **access unit (кадр)**,
-* выставляет:
+   * correct markers
+   * correct timestamps
+4. That RTP **was decoded successfully by a WebRTC client**
 
-  * `marker=1` только на последнем пакете кадра,
-  * одинаковый timestamp на все пакеты кадра,
-* генерирует timestamps **по wallclock**,
-* буферизует SPS/PPS и привязывает их к корректному кадру,
-* проксирует аудио **без изменений**.
+Then a CLI tool was built that:
 
----
+* read a pcap,
+* fixed marker/timestamp/SPS-PPS,
+* generated a “repaired” pcap,
+* and confirmed that WebRTC starts decoding.
 
-## Ограничения и допущения (важно)
-
-* Это **POC**, не production
-* RTCP **не используется** (домофон его не поддерживает)
-* 1 UDP порт на поток (RTP only)
-* Небольшая дополнительная задержка допустима (до ~150 ms)
-* Sequence numbers в базовой версии **не перенумеровываются**
-* Видео фикс применяется **только на направлении домофон → rtpengine**
+The live service is a **direct continuation of that offline logic**.
 
 ---
 
-## Почему нельзя “просто проксировать RTP”
+## What RTP-cleaner actually does
 
-Даже если RTP проходит через Kamailio/rtpengine:
+RTP-cleaner **does not decode video** and **does not change codecs**.
 
-* WebRTC **принимает пакеты**, но:
+It only does the following:
 
-  * не декодирует,
-  * считает поток некорректным,
-  * silently drop’ает кадры
+* assembles RTP packets into an **access unit (frame)**,
+* sets:
 
-RTP-cleaner нужен именно как **медиапрослойка**, которая приводит RTP в состояние, приемлемое для WebRTC.
-
----
-
-## Что ожидается от реализации
-
-Цель реализации — **повторить в live-режиме** ту же логику, которая уже доказала свою работоспособность на pcap:
-
-* минимальный буфер (1 кадр),
-* минимальная задержка,
-* корректные RTP semantics для H264.
+  * `marker=1` only on the last packet of a frame,
+  * the same timestamp on all packets of a frame,
+* generates timestamps **from wallclock**,
+* buffers SPS/PPS and associates them with the correct frame,
+* proxies audio **without changes**.
 
 ---
 
-## Ключевая мысль (если читать только один абзац)
+## Limitations and assumptions (important)
 
-> RTP-cleaner — это не “ещё один RTP proxy”.
-> Это **H264-aware RTP normalizer**, который исправляет ошибки домофона, из-за которых WebRTC не может декодировать видео.
+* This is a **POC**, not production
+* RTCP **is not used** (the doorphone doesn’t support it)
+* 1 UDP port per stream (RTP only)
+* Small additional latency is acceptable (up to ~150 ms)
+* Sequence numbers in the baseline version **are not renumbered**
+* Video fixes apply **only on the doorphone → rtpengine direction**
+
+---
+
+## Why you cannot “just proxy RTP”
+
+Even if RTP goes through Kamailio/rtpengine:
+
+* WebRTC **receives packets**, but:
+
+  * does not decode,
+  * considers the stream invalid,
+  * silently drops frames
+
+RTP-cleaner is needed as a **media shim** that normalizes RTP into a WebRTC-friendly form.
+
+---
+
+## What the implementation should deliver
+
+The goal is to **reproduce in live mode** the same logic already proven in pcap:
+
+* minimal buffering (1 frame),
+* minimal delay,
+* correct H264 RTP semantics.
+
+---
+
+## Key takeaway (if you read only one paragraph)
+
+> RTP-cleaner is not “just another RTP proxy”.
+> It is an **H264-aware RTP normalizer** that fixes doorphone errors that prevent WebRTC from decoding video.
