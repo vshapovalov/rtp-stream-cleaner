@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"rtp-stream-cleaner/internal/pcapio"
+	"rtp-stream-cleaner/internal/rtpfix"
 	"rtp-stream-cleaner/internal/rtpparse"
 )
 
@@ -415,8 +416,14 @@ func listSources(pcapPath string) error {
 	}
 	defer reader.Close()
 
-	type payloadCounts map[uint8]int
-	sources := make(map[uint32]payloadCounts)
+	type sourceStats struct {
+		packets int
+		sps     int
+		pps     int
+		idr     int
+		nonIDR  int
+	}
+	sources := make(map[uint32]map[uint8]*sourceStats)
 	for {
 		packet, err := reader.Next()
 		if err != nil {
@@ -435,10 +442,36 @@ func listSources(pcapPath string) error {
 		}
 		payloadTypes, ok := sources[rtpPacket.SSRC]
 		if !ok {
-			payloadTypes = make(payloadCounts)
+			payloadTypes = make(map[uint8]*sourceStats)
 			sources[rtpPacket.SSRC] = payloadTypes
 		}
-		payloadTypes[rtpPacket.PayloadType]++
+		stats, ok := payloadTypes[rtpPacket.PayloadType]
+		if !ok {
+			stats = &sourceStats{}
+			payloadTypes[rtpPacket.PayloadType] = stats
+		}
+		stats.packets++
+		if rtpPacket.HeaderSize < len(udpPayload) {
+			rtpPayload := udpPayload[rtpPacket.HeaderSize:]
+			if info, ok := rtpfix.ParseH264(rtpPayload); ok {
+				if info.IsFU && !info.FUStart {
+					continue
+				}
+				if info.IsSPS {
+					stats.sps++
+				}
+				if info.IsPPS {
+					stats.pps++
+				}
+				if info.IsSlice {
+					if info.IsIDR {
+						stats.idr++
+					} else {
+						stats.nonIDR++
+					}
+				}
+			}
+		}
 	}
 
 	ssrcs := make([]uint32, 0, len(sources))
@@ -454,7 +487,17 @@ func listSources(pcapPath string) error {
 		}
 		sort.Ints(payloadList)
 		for _, pt := range payloadList {
-			fmt.Printf("ssrc=0x%08x payload_type=%d packets=%d\n", ssrc, pt, payloadTypes[uint8(pt)])
+			stats := payloadTypes[uint8(pt)]
+			fmt.Printf(
+				"ssrc=0x%08x payload_type=%d packets=%d sps=%d pps=%d idr=%d non_idr=%d\n",
+				ssrc,
+				pt,
+				stats.packets,
+				stats.sps,
+				stats.pps,
+				stats.idr,
+				stats.nonIDR,
+			)
 		}
 	}
 	return nil
