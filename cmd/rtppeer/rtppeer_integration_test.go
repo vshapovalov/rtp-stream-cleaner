@@ -18,6 +18,14 @@ type sourceKey struct {
 	payloadType uint8
 }
 
+type sourceStats struct {
+	packets int
+	sps     int
+	pps     int
+	idr     int
+	nonIDR  int
+}
+
 func TestRTPPeerSendReceiveFromPCAP(t *testing.T) {
 	rootDir := repoRoot(t)
 	binaryPath := filepath.Join(t.TempDir(), "rtppeer")
@@ -115,7 +123,7 @@ func buildBinary(t *testing.T, rootDir, outputPath string) {
 	}
 }
 
-func runListSources(t *testing.T, rootDir, binaryPath, pcapPath string) map[sourceKey]int {
+func runListSources(t *testing.T, rootDir, binaryPath, pcapPath string) map[sourceKey]sourceStats {
 	t.Helper()
 	cmd := exec.Command(binaryPath, "--send-pcap", pcapPath, "--list-sources")
 	cmd.Dir = rootDir
@@ -126,53 +134,74 @@ func runListSources(t *testing.T, rootDir, binaryPath, pcapPath string) map[sour
 	return parseSources(t, string(output))
 }
 
-func parseSources(t *testing.T, output string) map[sourceKey]int {
+func parseSources(t *testing.T, output string) map[sourceKey]sourceStats {
 	t.Helper()
 	output = strings.TrimSpace(output)
 	if output == "" {
-		return map[sourceKey]int{}
+		return map[sourceKey]sourceStats{}
 	}
 
-	result := make(map[sourceKey]int)
+	result := make(map[sourceKey]sourceStats)
 	for _, line := range strings.Split(output, "\n") {
 		var ssrc uint32
 		var payloadType int
 		var packets int
-		_, err := fmt.Sscanf(line, "ssrc=0x%08x payload_type=%d packets=%d", &ssrc, &payloadType, &packets)
+		var sps int
+		var pps int
+		var idr int
+		var nonIDR int
+		_, err := fmt.Sscanf(
+			line,
+			"ssrc=0x%08x payload_type=%d packets=%d sps=%d pps=%d idr=%d non_idr=%d",
+			&ssrc,
+			&payloadType,
+			&packets,
+			&sps,
+			&pps,
+			&idr,
+			&nonIDR,
+		)
 		if err != nil {
 			t.Fatalf("parse list-sources line %q: %v", line, err)
 		}
-		result[sourceKey{ssrc: ssrc, payloadType: uint8(payloadType)}] = packets
+		result[sourceKey{ssrc: ssrc, payloadType: uint8(payloadType)}] = sourceStats{
+			packets: packets,
+			sps:     sps,
+			pps:     pps,
+			idr:     idr,
+			nonIDR:  nonIDR,
+		}
 	}
 	return result
 }
 
-func assertSourceCounts(t *testing.T, expected, actual map[sourceKey]int) {
+func assertSourceCounts(t *testing.T, expected, actual map[sourceKey]sourceStats) {
 	t.Helper()
 	if len(expected) != len(actual) {
 		t.Fatalf("source count mismatch: expected %d entries, got %d", len(expected), len(actual))
 	}
-	for key, expectedPackets := range expected {
-		actualPackets, ok := actual[key]
+	for key, expectedStats := range expected {
+		actualStats, ok := actual[key]
 		if !ok {
 			t.Fatalf("missing source ssrc=0x%08x payload_type=%d", key.ssrc, key.payloadType)
 		}
-		if actualPackets != expectedPackets {
-			t.Fatalf("packet count mismatch for ssrc=0x%08x payload_type=%d: expected %d, got %d",
+		if actualStats != expectedStats {
+			t.Fatalf(
+				"source stats mismatch for ssrc=0x%08x payload_type=%d: expected %+v, got %+v",
 				key.ssrc,
 				key.payloadType,
-				expectedPackets,
-				actualPackets,
+				expectedStats,
+				actualStats,
 			)
 		}
 	}
 }
 
-func filterSources(sourceCounts map[sourceKey]int, allowedSSRCs map[uint32]struct{}) map[sourceKey]int {
-	filtered := make(map[sourceKey]int)
-	for key, packets := range sourceCounts {
+func filterSources(sourceCounts map[sourceKey]sourceStats, allowedSSRCs map[uint32]struct{}) map[sourceKey]sourceStats {
+	filtered := make(map[sourceKey]sourceStats)
+	for key, stats := range sourceCounts {
 		if _, ok := allowedSSRCs[key.ssrc]; ok {
-			filtered[key] = packets
+			filtered[key] = stats
 		}
 	}
 	return filtered
