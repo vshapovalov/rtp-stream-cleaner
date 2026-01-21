@@ -415,8 +415,8 @@ func listSources(pcapPath string) error {
 	}
 	defer reader.Close()
 
-	type payloadSet map[uint8]struct{}
-	sources := make(map[uint32]payloadSet)
+	type payloadCounts map[uint8]int
+	sources := make(map[uint32]payloadCounts)
 	for {
 		packet, err := reader.Next()
 		if err != nil {
@@ -435,10 +435,10 @@ func listSources(pcapPath string) error {
 		}
 		payloadTypes, ok := sources[rtpPacket.SSRC]
 		if !ok {
-			payloadTypes = make(payloadSet)
+			payloadTypes = make(payloadCounts)
 			sources[rtpPacket.SSRC] = payloadTypes
 		}
-		payloadTypes[rtpPacket.PayloadType] = struct{}{}
+		payloadTypes[rtpPacket.PayloadType]++
 	}
 
 	ssrcs := make([]uint32, 0, len(sources))
@@ -454,7 +454,7 @@ func listSources(pcapPath string) error {
 		}
 		sort.Ints(payloadList)
 		for _, pt := range payloadList {
-			fmt.Printf("ssrc=0x%08x payload_type=%d\n", ssrc, pt)
+			fmt.Printf("ssrc=0x%08x payload_type=%d packets=%d\n", ssrc, pt, payloadTypes[uint8(pt)])
 		}
 	}
 	return nil

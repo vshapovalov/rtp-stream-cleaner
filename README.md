@@ -164,7 +164,7 @@ rtpengine-style receive-only example:
   --duration 10
 ```
 
-List RTP sources in a PCAP file:
+List RTP sources in a PCAP file (SSRC, payload type, packet count):
 
 ```bash
 ./rtppeer \
