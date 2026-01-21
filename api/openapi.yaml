@@ -222,6 +222,8 @@ components:
           type: boolean
         fix:
           type: boolean
+          default: true
+          description: When true, applies the video fixer pipeline. Defaults to true when omitted (legacy behavior). Ignored for audio.
 
     MediaUpdateRequest:
       type: object

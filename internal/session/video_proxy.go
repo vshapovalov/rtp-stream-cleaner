@@ -70,6 +70,7 @@ type videoProxy struct {
 	frameTSInitialized  bool
 	currentFrameTS      uint32
 	currentFrameTSSet   bool
+	fixEnabled          bool
 	pendingSPS          []byte
 	pendingPPS          []byte
 	cachedSPS           []byte
@@ -80,8 +81,11 @@ type videoProxy struct {
 	hasLastOutSeq       bool
 }
 
-func newVideoProxy(session *Session, aConn, bConn *net.UDPConn, peerLearningWindow, maxFrameWait time.Duration, injectCachedSPSPPS bool) *videoProxy {
+func newVideoProxy(session *Session, aConn, bConn *net.UDPConn, peerLearningWindow, maxFrameWait time.Duration, fixEnabled, injectCachedSPSPPS bool) *videoProxy {
 	ctx, cancel := context.WithCancel(context.Background())
+	if !fixEnabled {
+		injectCachedSPSPPS = false
+	}
 	return &videoProxy{
 		session:            session,
 		aConn:              aConn,
@@ -90,6 +94,7 @@ func newVideoProxy(session *Session, aConn, bConn *net.UDPConn, peerLearningWind
 		maxFrameWait:       maxFrameWait,
 		ctx:                ctx,
 		cancel:             cancel,
+		fixEnabled:         fixEnabled,
 		injectCachedSPSPPS: injectCachedSPSPPS,
 	}
 }
@@ -138,17 +143,25 @@ func (p *videoProxy) loopAIn() {
 		p.session.markActivity(time.Now())
 		p.session.videoCounters.aInPkts.Add(1)
 		p.session.videoCounters.aInBytes.Add(uint64(n))
-		p.analyzeFrameBoundaries(buffer[:n])
+		if p.fixEnabled {
+			p.analyzeFrameBoundaries(buffer[:n])
+		}
 		if !p.updateDoorphonePeer(addr) {
 			continue
 		}
 		dest := p.session.videoDest.Load()
 		if dest == nil {
-			p.resetFrameBuffer()
+			if p.fixEnabled {
+				p.resetFrameBuffer()
+			}
 			p.logMissingDest()
 			continue
 		}
-		p.handleVideoPacket(buffer[:n], dest)
+		if p.fixEnabled {
+			p.handleVideoPacket(buffer[:n], dest)
+			continue
+		}
+		p.forwardRawPacket(buffer[:n], dest)
 	}
 }
 
@@ -423,6 +436,15 @@ func (p *videoProxy) sendPacket(packet []byte, dest *net.UDPAddr) {
 	if p.injectCachedSPSPPS {
 		p.rewriteSeqForOutput(packet)
 	}
+	if _, err := p.bConn.WriteToUDP(packet, dest); err != nil {
+		log.Printf("video b leg write failed session=%s err=%v", p.session.ID, err)
+		return
+	}
+	p.session.videoCounters.bOutPkts.Add(1)
+	p.session.videoCounters.bOutBytes.Add(uint64(len(packet)))
+}
+
+func (p *videoProxy) forwardRawPacket(packet []byte, dest *net.UDPAddr) {
 	if _, err := p.bConn.WriteToUDP(packet, dest); err != nil {
 		log.Printf("video b leg write failed session=%s err=%v", p.session.ID, err)
 		return
