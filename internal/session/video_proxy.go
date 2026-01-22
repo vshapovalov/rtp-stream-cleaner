@@ -79,6 +79,7 @@ type videoProxy struct {
 	seqDelta            uint16
 	lastOutSeq          uint16
 	hasLastOutSeq       bool
+	writeToDest         func([]byte, *net.UDPAddr) error
 }
 
 func newVideoProxy(session *Session, aConn, bConn *net.UDPConn, peerLearningWindow, maxFrameWait time.Duration, fixEnabled, injectCachedSPSPPS bool) *videoProxy {
@@ -86,7 +87,7 @@ func newVideoProxy(session *Session, aConn, bConn *net.UDPConn, peerLearningWind
 	if !fixEnabled {
 		injectCachedSPSPPS = false
 	}
-	return &videoProxy{
+	proxy := &videoProxy{
 		session:            session,
 		aConn:              aConn,
 		bConn:              bConn,
@@ -97,6 +98,14 @@ func newVideoProxy(session *Session, aConn, bConn *net.UDPConn, peerLearningWind
 		fixEnabled:         fixEnabled,
 		injectCachedSPSPPS: injectCachedSPSPPS,
 	}
+	proxy.writeToDest = func(packet []byte, dest *net.UDPAddr) error {
+		if bConn == nil {
+			return errors.New("video b conn is nil")
+		}
+		_, err := bConn.WriteToUDP(packet, dest)
+		return err
+	}
+	return proxy
 }
 
 func (p *videoProxy) start() {
@@ -436,7 +445,7 @@ func (p *videoProxy) sendPacket(packet []byte, dest *net.UDPAddr) {
 	if p.injectCachedSPSPPS {
 		p.rewriteSeqForOutput(packet)
 	}
-	if _, err := p.bConn.WriteToUDP(packet, dest); err != nil {
+	if err := p.writeToDest(packet, dest); err != nil {
 		log.Printf("video b leg write failed session=%s err=%v", p.session.ID, err)
 		return
 	}
@@ -445,7 +454,7 @@ func (p *videoProxy) sendPacket(packet []byte, dest *net.UDPAddr) {
 }
 
 func (p *videoProxy) forwardRawPacket(packet []byte, dest *net.UDPAddr) {
-	if _, err := p.bConn.WriteToUDP(packet, dest); err != nil {
+	if err := p.writeToDest(packet, dest); err != nil {
 		log.Printf("video b leg write failed session=%s err=%v", p.session.ID, err)
 		return
 	}
@@ -488,7 +497,7 @@ func (p *videoProxy) sendInjectedPacket(payload []byte, header rtpfix.RTPHeader,
 	binary.BigEndian.PutUint32(packet[4:8], p.currentFrameTS)
 	binary.BigEndian.PutUint32(packet[8:12], header.SSRC)
 	copy(packet[12:], payload)
-	if _, err := p.bConn.WriteToUDP(packet, dest); err != nil {
+	if err := p.writeToDest(packet, dest); err != nil {
 		log.Printf("video b leg write failed session=%s err=%v", p.session.ID, err)
 		return
 	}
