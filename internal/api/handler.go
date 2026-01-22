@@ -14,13 +14,20 @@ import (
 	"rtp-stream-cleaner/internal/session"
 )
 
+type SessionManager interface {
+	Create(callID, fromTag, toTag string, videoFix bool) (*session.Session, error)
+	Get(id string) (*session.Session, bool)
+	UpdateRTPDest(id string, audioDest, videoDest *net.UDPAddr) (*session.Session, bool)
+	Delete(id string) bool
+}
+
 type Handler struct {
-	manager    *session.Manager
+	manager    SessionManager
 	publicIP   string
 	internalIP string
 }
 
-func NewHandler(cfg config.Config, manager *session.Manager) *Handler {
+func NewHandler(cfg config.Config, manager SessionManager) *Handler {
 	internalIP := cfg.InternalIP
 	if internalIP == "" {
 		internalIP = cfg.PublicIP
@@ -142,6 +149,10 @@ func (h *Handler) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 	var req createSessionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid json body"})
+		return
+	}
+	if req.CallID == "" || req.FromTag == "" || req.ToTag == "" {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "call_id, from_tag, and to_tag are required"})
 		return
 	}
 	// Default to true when omitted to preserve legacy behavior (video fix enabled).

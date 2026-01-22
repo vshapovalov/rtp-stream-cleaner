@@ -27,10 +27,10 @@ type Session struct {
 	State            string
 	AudioCounters    AudioCounters
 	VideoCounters    VideoCounters
-	audioProxy       *audioProxy
+	audioProxy       sessionProxy
 	audioCounters    audioCounters
 	audioDest        atomic.Pointer[net.UDPAddr]
-	videoProxy       *videoProxy
+	videoProxy       sessionProxy
 	videoCounters    videoCounters
 	videoDest        atomic.Pointer[net.UDPAddr]
 	lastActivityNsec atomic.Int64
@@ -45,12 +45,49 @@ type Manager struct {
 	maxFrameWait            time.Duration
 	idleTimeout             time.Duration
 	videoInjectCachedSPSPPS bool
+	now                     func() time.Time
+	listenUDP               func(network string, laddr *net.UDPAddr) (*net.UDPConn, error)
+	newAudioProxy           func(session *Session, aConn, bConn *net.UDPConn, peerLearningWindow time.Duration) sessionProxy
+	newVideoProxy           func(session *Session, aConn, bConn *net.UDPConn, peerLearningWindow, maxFrameWait time.Duration, videoFix bool, inject bool) sessionProxy
 	stopCh                  chan struct{}
 	stopOnce                sync.Once
 	wg                      sync.WaitGroup
 }
 
+type sessionProxy interface {
+	start()
+	stop()
+}
+
+type managerDeps struct {
+	now           func() time.Time
+	listenUDP     func(network string, laddr *net.UDPAddr) (*net.UDPConn, error)
+	newAudioProxy func(session *Session, aConn, bConn *net.UDPConn, peerLearningWindow time.Duration) sessionProxy
+	newVideoProxy func(session *Session, aConn, bConn *net.UDPConn, peerLearningWindow, maxFrameWait time.Duration, videoFix bool, inject bool) sessionProxy
+	startReaper   bool
+}
+
 func NewManager(allocator *PortAllocator, peerLearningWindow, maxFrameWait, idleTimeout time.Duration, videoInjectCachedSPSPPS bool) *Manager {
+	return newManagerWithDeps(allocator, peerLearningWindow, maxFrameWait, idleTimeout, videoInjectCachedSPSPPS, managerDeps{startReaper: true})
+}
+
+func newManagerWithDeps(allocator *PortAllocator, peerLearningWindow, maxFrameWait, idleTimeout time.Duration, videoInjectCachedSPSPPS bool, deps managerDeps) *Manager {
+	if deps.now == nil {
+		deps.now = time.Now
+	}
+	if deps.listenUDP == nil {
+		deps.listenUDP = net.ListenUDP
+	}
+	if deps.newAudioProxy == nil {
+		deps.newAudioProxy = func(session *Session, aConn, bConn *net.UDPConn, peerLearningWindow time.Duration) sessionProxy {
+			return newAudioProxy(session, aConn, bConn, peerLearningWindow)
+		}
+	}
+	if deps.newVideoProxy == nil {
+		deps.newVideoProxy = func(session *Session, aConn, bConn *net.UDPConn, peerLearningWindow, maxFrameWait time.Duration, videoFix bool, inject bool) sessionProxy {
+			return newVideoProxy(session, aConn, bConn, peerLearningWindow, maxFrameWait, videoFix, inject)
+		}
+	}
 	manager := &Manager{
 		sessions:                make(map[string]*Session),
 		allocator:               allocator,
@@ -58,9 +95,13 @@ func NewManager(allocator *PortAllocator, peerLearningWindow, maxFrameWait, idle
 		maxFrameWait:            maxFrameWait,
 		idleTimeout:             idleTimeout,
 		videoInjectCachedSPSPPS: videoInjectCachedSPSPPS,
+		now:                     deps.now,
+		listenUDP:               deps.listenUDP,
+		newAudioProxy:           deps.newAudioProxy,
+		newVideoProxy:           deps.newVideoProxy,
 		stopCh:                  make(chan struct{}),
 	}
-	if idleTimeout > 0 {
+	if idleTimeout > 0 && deps.startReaper {
 		manager.wg.Add(1)
 		go manager.reapIdleSessions()
 	}
@@ -87,38 +128,50 @@ func (m *Manager) Create(callID, fromTag, toTag string, videoFix bool) (*Session
 		},
 	}
 	session.setState(stateCreated)
-	session.setLastActivity(time.Now())
+	session.setLastActivity(m.now())
 	session.audioDest.Store((*net.UDPAddr)(nil))
 	session.videoDest.Store((*net.UDPAddr)(nil))
 
-	aConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: session.Audio.APort})
+	aConn, err := m.listenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: session.Audio.APort})
 	if err != nil {
 		m.allocator.Release(ports)
 		return nil, fmt.Errorf("audio a socket: %w", err)
 	}
-	bConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: session.Audio.BPort})
+	bConn, err := m.listenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: session.Audio.BPort})
 	if err != nil {
-		_ = aConn.Close()
+		if aConn != nil {
+			_ = aConn.Close()
+		}
 		m.allocator.Release(ports)
 		return nil, fmt.Errorf("audio b socket: %w", err)
 	}
-	videoAConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: session.Video.APort})
+	videoAConn, err := m.listenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: session.Video.APort})
 	if err != nil {
-		_ = aConn.Close()
-		_ = bConn.Close()
+		if aConn != nil {
+			_ = aConn.Close()
+		}
+		if bConn != nil {
+			_ = bConn.Close()
+		}
 		m.allocator.Release(ports)
 		return nil, fmt.Errorf("video a socket: %w", err)
 	}
-	videoBConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: session.Video.BPort})
+	videoBConn, err := m.listenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: session.Video.BPort})
 	if err != nil {
-		_ = aConn.Close()
-		_ = bConn.Close()
-		_ = videoAConn.Close()
+		if aConn != nil {
+			_ = aConn.Close()
+		}
+		if bConn != nil {
+			_ = bConn.Close()
+		}
+		if videoAConn != nil {
+			_ = videoAConn.Close()
+		}
 		m.allocator.Release(ports)
 		return nil, fmt.Errorf("video b socket: %w", err)
 	}
-	session.audioProxy = newAudioProxy(session, aConn, bConn, m.peerLearningWindow)
-	session.videoProxy = newVideoProxy(session, videoAConn, videoBConn, m.peerLearningWindow, m.maxFrameWait, videoFix, m.videoInjectCachedSPSPPS)
+	session.audioProxy = m.newAudioProxy(session, aConn, bConn, m.peerLearningWindow)
+	session.videoProxy = m.newVideoProxy(session, videoAConn, videoBConn, m.peerLearningWindow, m.maxFrameWait, videoFix, m.videoInjectCachedSPSPPS)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -225,6 +278,10 @@ func (m *Manager) Close() {
 	})
 }
 
+func (m *Manager) Cleanup(now time.Time) {
+	m.removeIdleSessions(now)
+}
+
 func (m *Manager) reapIdleSessions() {
 	defer m.wg.Done()
 	interval := m.idleTimeout / 2
@@ -236,7 +293,7 @@ func (m *Manager) reapIdleSessions() {
 	for {
 		select {
 		case <-ticker.C:
-			m.removeIdleSessions(time.Now())
+			m.removeIdleSessions(m.now())
 		case <-m.stopCh:
 			return
 		}
