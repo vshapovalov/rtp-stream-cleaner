@@ -6,6 +6,9 @@ import "fmt"
 type Packet struct {
 	SSRC        uint32
 	PayloadType uint8
+	Seq         uint16
+	TS          uint32
+	Marker      bool
 	HeaderSize  int
 }
 
@@ -35,6 +38,15 @@ func Parse(payload []byte) (Packet, error) {
 		}
 	}
 	payloadType := payload[1] & 0x7f
+	seq := uint16(payload[2])<<8 | uint16(payload[3])
+	ts := uint32(payload[4])<<24 | uint32(payload[5])<<16 | uint32(payload[6])<<8 | uint32(payload[7])
 	ssrc := uint32(payload[8])<<24 | uint32(payload[9])<<16 | uint32(payload[10])<<8 | uint32(payload[11])
-	return Packet{SSRC: ssrc, PayloadType: payloadType, HeaderSize: headerSize}, nil
+	return Packet{
+		SSRC:        ssrc,
+		PayloadType: payloadType,
+		Seq:         seq,
+		TS:          ts,
+		Marker:      payload[1]&0x80 != 0,
+		HeaderSize:  headerSize,
+	}, nil
 }
