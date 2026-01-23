@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -69,6 +70,15 @@ func newTestHandler(manager SessionManager) *Handler {
 	return NewHandler(cfg, manager)
 }
 
+func performRequest(handler *Handler, method, path string, body io.Reader) *httptest.ResponseRecorder {
+	mux := http.NewServeMux()
+	handler.Register(mux)
+	req := httptest.NewRequest(method, path, body)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, req)
+	return recorder
+}
+
 // TestAPI_CreateSession_BadJSON_400 verifies that the create-session handler
 // rejects malformed JSON with a 400 status and does not invoke the manager.
 // This matters because clients must receive clear validation errors and the
@@ -84,10 +94,7 @@ func TestAPI_CreateSession_BadJSON_400(t *testing.T) {
 	manager := &mockManager{}
 	handler := newTestHandler(manager)
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/session", bytes.NewBufferString("{bad"))
-	recorder := httptest.NewRecorder()
-
-	handler.handleSessionCreate(recorder, req)
+	recorder := performRequest(handler, http.MethodPost, "/v1/session", bytes.NewBufferString("{bad"))
 
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, recorder.Code)
@@ -118,10 +125,7 @@ func TestAPI_CreateSession_MissingFields_400(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected marshal error: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodPost, "/v1/session", bytes.NewBuffer(body))
-	recorder := httptest.NewRecorder()
-
-	handler.handleSessionCreate(recorder, req)
+	recorder := performRequest(handler, http.MethodPost, "/v1/session", bytes.NewBuffer(body))
 
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, recorder.Code)
@@ -151,10 +155,7 @@ func TestAPI_UpdateSession_UnknownID_404(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected marshal error: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodPost, "/v1/session/unknown/update", bytes.NewBuffer(body))
-	recorder := httptest.NewRecorder()
-
-	handler.handleSessionByID(recorder, req)
+	recorder := performRequest(handler, http.MethodPost, "/v1/session/unknown/update", bytes.NewBuffer(body))
 
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("expected status %d, got %d", http.StatusNotFound, recorder.Code)
@@ -196,10 +197,7 @@ func TestAPI_UpdateSession_PartialUpdate_CallsManagerCorrectly(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected marshal error: %v", err)
 		}
-		req := httptest.NewRequest(http.MethodPost, "/v1/session/sess-a/update", bytes.NewBuffer(body))
-		recorder := httptest.NewRecorder()
-
-		handler.handleSessionByID(recorder, req)
+		recorder := performRequest(handler, http.MethodPost, "/v1/session/sess-a/update", bytes.NewBuffer(body))
 
 		if recorder.Code != http.StatusOK {
 			t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
@@ -231,10 +229,7 @@ func TestAPI_UpdateSession_PartialUpdate_CallsManagerCorrectly(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected marshal error: %v", err)
 		}
-		req := httptest.NewRequest(http.MethodPost, "/v1/session/sess-v/update", bytes.NewBuffer(body))
-		recorder := httptest.NewRecorder()
-
-		handler.handleSessionByID(recorder, req)
+		recorder := performRequest(handler, http.MethodPost, "/v1/session/sess-v/update", bytes.NewBuffer(body))
 
 		if recorder.Code != http.StatusOK {
 			t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
@@ -252,8 +247,8 @@ func TestAPI_UpdateSession_PartialUpdate_CallsManagerCorrectly(t *testing.T) {
 // session returns HTTP 404 and does not report success. This matters because
 // callers need accurate feedback when an ID is stale. Preconditions: handler
 // with a mock manager that returns false for Delete. Inputs: HTTP DELETE on a
-// session ID that does not exist. Edge case: method routing to handleSessionByID
-// with a valid ID but missing session. The expected output is HTTP 404 with a
+// session ID that does not exist. Edge case: route matches a valid ID but the
+// session is missing. The expected output is HTTP 404 with a
 // single Delete call, which is stable because the handler forwards directly to
 // the manager. Flakiness is avoided by not using network or time. A regression
 // would return 200 or skip the Delete call for unknown IDs.
@@ -261,10 +256,30 @@ func TestAPI_DeleteSession_UnknownID_404(t *testing.T) {
 	manager := &mockManager{deleteOK: false}
 	handler := newTestHandler(manager)
 
-	req := httptest.NewRequest(http.MethodDelete, "/v1/session/unknown", nil)
-	recorder := httptest.NewRecorder()
+	recorder := performRequest(handler, http.MethodDelete, "/v1/session/unknown", nil)
 
-	handler.handleSessionByID(recorder, req)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d", http.StatusNotFound, recorder.Code)
+	}
+	if manager.deleteCalls != 1 {
+		t.Fatalf("expected Delete to be called once")
+	}
+}
+
+// TestAPI_DeleteSessionPost_UnknownID_404 verifies that the POST fallback delete
+// route returns HTTP 404 for missing sessions. This matters because clients
+// without DELETE support still need accurate errors. Preconditions: handler with
+// a mock manager that returns false for Delete. Inputs: HTTP POST on the delete
+// fallback route for an unknown session ID. Edge case: explicit /delete suffix.
+// The expected output is HTTP 404 and a single Delete call, which is stable
+// because the handler delegates directly to the manager. Flakiness is avoided
+// by using httptest without external dependencies. A regression would return
+// 200 or skip Delete.
+func TestAPI_DeleteSessionPost_UnknownID_404(t *testing.T) {
+	manager := &mockManager{deleteOK: false}
+	handler := newTestHandler(manager)
+
+	recorder := performRequest(handler, http.MethodPost, "/v1/session/unknown/delete", nil)
 
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("expected status %d, got %d", http.StatusNotFound, recorder.Code)

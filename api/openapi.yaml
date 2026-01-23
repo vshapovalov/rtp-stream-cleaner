@@ -139,6 +139,33 @@ paths:
               example:
                 ok: true
 
+  /v1/session/{id}/delete:
+    post:
+      tags:
+        - session
+      summary: Delete session (POST fallback)
+      description: Fallback route for clients that cannot issue HTTP DELETE.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Deleted (idempotent)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                required:
+                  - ok
+              example:
+                ok: true
+
   /v1/session/{id}/update:
     post:
       tags:
