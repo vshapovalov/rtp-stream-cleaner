@@ -8,6 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"rtp-stream-cleaner/internal/logging"
 )
 
 type Media struct {
@@ -21,6 +23,7 @@ type Session struct {
 	CallID           string
 	FromTag          string
 	ToTag            string
+	CreatedAt        time.Time
 	Audio            Media
 	Video            Media
 	LastActivity     time.Time
@@ -114,10 +117,11 @@ func (m *Manager) Create(callID, fromTag, toTag string, videoFix bool) (*Session
 		return nil, err
 	}
 	session := &Session{
-		ID:      m.generateID(),
-		CallID:  callID,
-		FromTag: fromTag,
-		ToTag:   toTag,
+		ID:        m.generateID(),
+		CallID:    callID,
+		FromTag:   fromTag,
+		ToTag:     toTag,
+		CreatedAt: m.now(),
 		Audio: Media{
 			APort: ports[0],
 			BPort: ports[1],
@@ -134,11 +138,13 @@ func (m *Manager) Create(callID, fromTag, toTag string, videoFix bool) (*Session
 
 	aConn, err := m.listenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: session.Audio.APort})
 	if err != nil {
+		logging.WithSessionID(session.ID).Error("session.create failed", "error", err)
 		m.allocator.Release(ports)
 		return nil, fmt.Errorf("audio a socket: %w", err)
 	}
 	bConn, err := m.listenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: session.Audio.BPort})
 	if err != nil {
+		logging.WithSessionID(session.ID).Error("session.create failed", "error", err)
 		if aConn != nil {
 			_ = aConn.Close()
 		}
@@ -147,6 +153,7 @@ func (m *Manager) Create(callID, fromTag, toTag string, videoFix bool) (*Session
 	}
 	videoAConn, err := m.listenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: session.Video.APort})
 	if err != nil {
+		logging.WithSessionID(session.ID).Error("session.create failed", "error", err)
 		if aConn != nil {
 			_ = aConn.Close()
 		}
@@ -158,6 +165,7 @@ func (m *Manager) Create(callID, fromTag, toTag string, videoFix bool) (*Session
 	}
 	videoBConn, err := m.listenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: session.Video.BPort})
 	if err != nil {
+		logging.WithSessionID(session.ID).Error("session.create failed", "error", err)
 		if aConn != nil {
 			_ = aConn.Close()
 		}
