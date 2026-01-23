@@ -33,6 +33,12 @@ func main() {
 		time.Duration(cfg.MaxFrameWaitMS)*time.Millisecond,
 		time.Duration(cfg.IdleTimeoutSec)*time.Second,
 		cfg.VideoInjectCachedSPSPPS,
+		session.ProxyLogConfig{
+			StatsInterval:      time.Duration(cfg.StatsLogIntervalSec) * time.Second,
+			PacketLog:          cfg.PacketLog,
+			PacketLogSampleN:   uint64(cfg.PacketLogSampleN),
+			PacketLogOnAnomaly: cfg.PacketLogOnAnomaly,
+		},
 	)
 	handler := api.NewHandler(cfg, manager)
 

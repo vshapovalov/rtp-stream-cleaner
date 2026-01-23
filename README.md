@@ -34,6 +34,10 @@ PUBLIC_IP=203.0.113.10 ./bin/rtp-cleaner
 | `MAX_FRAME_WAIT_MS` | `120` | Max wait before forcing a video frame flush. |
 | `IDLE_TIMEOUT_SEC` | `60` | Auto-delete sessions after inactivity. |
 | `VIDEO_INJECT_CACHED_SPS_PPS` | `false` | Inject cached SPS/PPS before IDR frames when missing in stream. |
+| `STATS_LOG_INTERVAL_SEC` | `5` | Interval for per-session proxy stats logs. |
+| `PACKET_LOG` | `false` | Enable debug packet logging. |
+| `PACKET_LOG_SAMPLE_N` | `0` | Log every Nth packet when packet logging is enabled (`0` disables sampling). |
+| `PACKET_LOG_ON_ANOMALY` | `true (when PACKET_LOG=true)` | Log packet anomalies when packet logging is enabled. |
 | `LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, or `error`. |
 | `LOG_FORMAT` | `json` | Log format: `json` or `text`. |
 

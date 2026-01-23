@@ -23,14 +23,15 @@ func newTestManager(t *testing.T, idleTimeout time.Duration) *Manager {
 		0,
 		idleTimeout,
 		false,
+		ProxyLogConfig{},
 		managerDeps{
 			startReaper: false,
 			now:         func() time.Time { return time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC) },
 			listenUDP:   func(string, *net.UDPAddr) (*net.UDPConn, error) { return nil, nil },
-			newAudioProxy: func(*Session, *net.UDPConn, *net.UDPConn, time.Duration) sessionProxy {
+			newAudioProxy: func(*Session, *net.UDPConn, *net.UDPConn, time.Duration, ProxyLogConfig) sessionProxy {
 				return &noopProxy{}
 			},
-			newVideoProxy: func(*Session, *net.UDPConn, *net.UDPConn, time.Duration, time.Duration, bool, bool) sessionProxy {
+			newVideoProxy: func(*Session, *net.UDPConn, *net.UDPConn, time.Duration, time.Duration, bool, bool, ProxyLogConfig) sessionProxy {
 				return &noopProxy{}
 			},
 		},
