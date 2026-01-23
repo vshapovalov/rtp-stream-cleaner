@@ -15,9 +15,14 @@ type Config struct {
 	MaxFrameWaitMS          int
 	IdleTimeoutSec          int
 	VideoInjectCachedSPSPPS bool
+	StatsLogIntervalSec     int
+	PacketLog               bool
+	PacketLogSampleN        int
+	PacketLogOnAnomaly      bool
 }
 
 func Load() Config {
+	packetLog := getEnvBool("PACKET_LOG", false)
 	return Config{
 		APIListenAddr:           getEnv("API_LISTEN_ADDR", "0.0.0.0:8080"),
 		PublicIP:                os.Getenv("PUBLIC_IP"),
@@ -28,6 +33,10 @@ func Load() Config {
 		MaxFrameWaitMS:          getEnvInt("MAX_FRAME_WAIT_MS", 120),
 		IdleTimeoutSec:          getEnvInt("IDLE_TIMEOUT_SEC", 60),
 		VideoInjectCachedSPSPPS: getEnvBool("VIDEO_INJECT_CACHED_SPS_PPS", false),
+		StatsLogIntervalSec:     getEnvInt("STATS_LOG_INTERVAL_SEC", 5),
+		PacketLog:               packetLog,
+		PacketLogSampleN:        getEnvInt("PACKET_LOG_SAMPLE_N", 0),
+		PacketLogOnAnomaly:      getEnvBool("PACKET_LOG_ON_ANOMALY", packetLog),
 	}
 }
 

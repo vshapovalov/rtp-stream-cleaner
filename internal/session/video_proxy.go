@@ -15,21 +15,25 @@ import (
 )
 
 type videoCounters struct {
-	aInPkts            atomic.Uint64
-	aInBytes           atomic.Uint64
-	bOutPkts           atomic.Uint64
-	bOutBytes          atomic.Uint64
-	bInPkts            atomic.Uint64
-	bInBytes           atomic.Uint64
-	aOutPkts           atomic.Uint64
-	aOutBytes          atomic.Uint64
-	videoFramesStarted atomic.Uint64
-	videoFramesEnded   atomic.Uint64
-	videoFramesFlushed atomic.Uint64
-	videoForcedFlushes atomic.Uint64
-	videoInjectedSPS   atomic.Uint64
-	videoInjectedPPS   atomic.Uint64
-	videoSeqDelta      atomic.Uint64
+	aInPkts             atomic.Uint64
+	aInBytes            atomic.Uint64
+	bOutPkts            atomic.Uint64
+	bOutBytes           atomic.Uint64
+	bInPkts             atomic.Uint64
+	bInBytes            atomic.Uint64
+	aOutPkts            atomic.Uint64
+	aOutBytes           atomic.Uint64
+	videoFramesStarted  atomic.Uint64
+	videoFramesEnded    atomic.Uint64
+	videoFramesFlushed  atomic.Uint64
+	videoForcedFlushes  atomic.Uint64
+	videoInjectedSPS    atomic.Uint64
+	videoInjectedPPS    atomic.Uint64
+	videoSeqDelta       atomic.Uint64
+	videoKeyframes      atomic.Uint64
+	videoNalParseErrors atomic.Uint64
+	videoSeqGaps        atomic.Uint64
+	drops               atomic.Uint64
 }
 
 type VideoCounters struct {
@@ -56,6 +60,10 @@ type videoProxy struct {
 	bConn               *net.UDPConn
 	peerLearningWindow  time.Duration
 	maxFrameWait        time.Duration
+	statsInterval       time.Duration
+	packetLog           bool
+	packetLogSampleN    uint64
+	packetLogOnAnomaly  bool
 	logger              *slog.Logger
 	ctx                 context.Context
 	cancel              context.CancelFunc
@@ -84,7 +92,7 @@ type videoProxy struct {
 	writeToDest         func([]byte, *net.UDPAddr) error
 }
 
-func newVideoProxy(session *Session, aConn, bConn *net.UDPConn, peerLearningWindow, maxFrameWait time.Duration, fixEnabled, injectCachedSPSPPS bool) *videoProxy {
+func newVideoProxy(session *Session, aConn, bConn *net.UDPConn, peerLearningWindow, maxFrameWait time.Duration, fixEnabled, injectCachedSPSPPS bool, logConfig ProxyLogConfig) *videoProxy {
 	ctx, cancel := context.WithCancel(context.Background())
 	if !fixEnabled {
 		injectCachedSPSPPS = false
@@ -95,6 +103,10 @@ func newVideoProxy(session *Session, aConn, bConn *net.UDPConn, peerLearningWind
 		bConn:              bConn,
 		peerLearningWindow: peerLearningWindow,
 		maxFrameWait:       maxFrameWait,
+		statsInterval:      logConfig.StatsInterval,
+		packetLog:          logConfig.PacketLog,
+		packetLogSampleN:   logConfig.PacketLogSampleN,
+		packetLogOnAnomaly: logConfig.PacketLogOnAnomaly,
 		ctx:                ctx,
 		cancel:             cancel,
 		fixEnabled:         fixEnabled,
@@ -121,6 +133,13 @@ func (p *videoProxy) start() {
 		defer p.wg.Done()
 		p.loopBIn()
 	}()
+	if p.statsInterval > 0 {
+		p.wg.Add(1)
+		go func() {
+			defer p.wg.Done()
+			p.logStatsLoop()
+		}()
+	}
 }
 
 func (p *videoProxy) stop() {
@@ -134,6 +153,9 @@ func (p *videoProxy) stop() {
 
 func (p *videoProxy) loopAIn() {
 	buffer := make([]byte, udpReadBufferSize)
+	var packetCount uint64
+	var lastSeq uint16
+	var hasLastSeq bool
 	for {
 		select {
 		case <-p.ctx.Done():
@@ -155,10 +177,13 @@ func (p *videoProxy) loopAIn() {
 		p.session.markActivity(time.Now())
 		p.session.videoCounters.aInPkts.Add(1)
 		p.session.videoCounters.aInBytes.Add(uint64(n))
+		header, headerOK, seqGap := p.trackSeqGap(buffer[:n], &lastSeq, &hasLastSeq)
+		p.logPacketIfNeeded("a->b", header, headerOK, seqGap, n, &packetCount)
 		if p.fixEnabled {
 			p.analyzeFrameBoundaries(buffer[:n])
 		}
 		if !p.updateDoorphonePeer(addr) {
+			p.session.videoCounters.drops.Add(1)
 			continue
 		}
 		dest := p.session.videoDest.Load()
@@ -167,6 +192,7 @@ func (p *videoProxy) loopAIn() {
 				p.resetFrameBuffer()
 			}
 			p.logMissingDest()
+			p.session.videoCounters.drops.Add(1)
 			continue
 		}
 		if p.fixEnabled {
@@ -179,6 +205,9 @@ func (p *videoProxy) loopAIn() {
 
 func (p *videoProxy) loopBIn() {
 	buffer := make([]byte, udpReadBufferSize)
+	var packetCount uint64
+	var lastSeq uint16
+	var hasLastSeq bool
 	for {
 		select {
 		case <-p.ctx.Done():
@@ -200,16 +229,21 @@ func (p *videoProxy) loopBIn() {
 		p.session.markActivity(time.Now())
 		dest := p.session.videoDest.Load()
 		if dest == nil || !dest.IP.Equal(addr.IP) {
+			p.session.videoCounters.drops.Add(1)
 			continue
 		}
 		p.session.videoCounters.bInPkts.Add(1)
 		p.session.videoCounters.bInBytes.Add(uint64(n))
+		header, headerOK, seqGap := p.trackSeqGap(buffer[:n], &lastSeq, &hasLastSeq)
+		p.logPacketIfNeeded("b->a", header, headerOK, seqGap, n, &packetCount)
 		peer := p.getDoorphonePeer()
 		if peer == nil {
+			p.session.videoCounters.drops.Add(1)
 			continue
 		}
 		if _, err := p.aConn.WriteToUDP(buffer[:n], peer); err != nil {
 			p.logger.Error("video a leg write failed", "error", err)
+			p.session.videoCounters.drops.Add(1)
 			continue
 		}
 		p.session.videoCounters.aOutPkts.Add(1)
@@ -256,6 +290,65 @@ func (p *videoProxy) logMissingDest() {
 	}
 }
 
+func (p *videoProxy) logStatsLoop() {
+	ticker := time.NewTicker(p.statsInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			p.logStats(false)
+		case <-p.ctx.Done():
+			p.logStats(true)
+			return
+		}
+	}
+}
+
+func (p *videoProxy) logStats(final bool) {
+	counters := &p.session.videoCounters
+	pktsIn := counters.aInPkts.Load() + counters.bInPkts.Load()
+	pktsOut := counters.aOutPkts.Load() + counters.bOutPkts.Load()
+	bytesIn := counters.aInBytes.Load() + counters.bInBytes.Load()
+	bytesOut := counters.aOutBytes.Load() + counters.bOutBytes.Load()
+	drops := counters.drops.Load()
+	frames := counters.videoFramesStarted.Load()
+	keyframes := counters.videoKeyframes.Load()
+	spsPpsInjected := counters.videoInjectedSPS.Load() + counters.videoInjectedPPS.Load()
+	forcedFlushes := counters.videoForcedFlushes.Load()
+	nalParseErrors := counters.videoNalParseErrors.Load()
+	seqGaps := counters.videoSeqGaps.Load()
+	if final {
+		p.logger.Info("video.proxy.stats",
+			"pkts_in", pktsIn,
+			"pkts_out", pktsOut,
+			"bytes_in", bytesIn,
+			"bytes_out", bytesOut,
+			"drops", drops,
+			"frames", frames,
+			"keyframes", keyframes,
+			"sps_pps_injected", spsPpsInjected,
+			"forced_flushes", forcedFlushes,
+			"nal_parse_errors", nalParseErrors,
+			"seq_gaps", seqGaps,
+			"final", true,
+		)
+		return
+	}
+	p.logger.Info("video.proxy.stats",
+		"pkts_in", pktsIn,
+		"pkts_out", pktsOut,
+		"bytes_in", bytesIn,
+		"bytes_out", bytesOut,
+		"drops", drops,
+		"frames", frames,
+		"keyframes", keyframes,
+		"sps_pps_injected", spsPpsInjected,
+		"forced_flushes", forcedFlushes,
+		"nal_parse_errors", nalParseErrors,
+		"seq_gaps", seqGaps,
+	)
+}
+
 func snapshotVideoCounters(counters *videoCounters) VideoCounters {
 	if counters == nil {
 		return VideoCounters{}
@@ -294,6 +387,9 @@ func (p *videoProxy) analyzeFrameBoundaries(packet []byte) {
 	}
 	if rtpfix.IsFrameStart(info) {
 		p.session.videoCounters.videoFramesStarted.Add(1)
+		if info.IsIDR {
+			p.session.videoCounters.videoKeyframes.Add(1)
+		}
 	}
 	if rtpfix.IsFrameEnd(info) {
 		p.session.videoCounters.videoFramesEnded.Add(1)
@@ -301,7 +397,7 @@ func (p *videoProxy) analyzeFrameBoundaries(packet []byte) {
 }
 
 func (p *videoProxy) handleVideoPacket(packet []byte, dest *net.UDPAddr) {
-	packetInfo, ok := parseH264Packet(packet)
+	packetInfo, ok, headerOK := parseH264PacketDetailed(packet)
 	if ok {
 		now := time.Now()
 		if packetInfo.info.IsSlice {
@@ -335,6 +431,10 @@ func (p *videoProxy) handleVideoPacket(packet []byte, dest *net.UDPAddr) {
 			return
 		}
 	}
+	if headerOK {
+		p.session.videoCounters.videoNalParseErrors.Add(1)
+		p.logPacketAnomaly("a->b", packet)
+	}
 	p.flushOnTimeout(time.Now(), dest)
 	p.sendPacket(packet, dest)
 }
@@ -346,23 +446,31 @@ type h264Packet struct {
 }
 
 func parseH264Packet(packet []byte) (h264Packet, bool) {
+	packetInfo, ok, _ := parseH264PacketDetailed(packet)
+	return packetInfo, ok
+}
+
+func parseH264PacketDetailed(packet []byte) (h264Packet, bool, bool) {
 	header, ok := rtpfix.ParseRTPHeader(packet)
 	if !ok {
-		return h264Packet{}, false
+		return h264Packet{}, false, false
 	}
 	if header.HeaderLen >= len(packet) {
-		return h264Packet{}, false
+		return h264Packet{}, false, false
 	}
 	payload := packet[header.HeaderLen:]
 	info, ok := rtpfix.ParseH264(payload)
 	if !ok {
-		return h264Packet{}, false
+		return h264Packet{
+			header:  header,
+			payload: payload,
+		}, false, true
 	}
 	return h264Packet{
 		header:  header,
 		payload: payload,
 		info:    info,
-	}, true
+	}, true, true
 }
 
 func (p *videoProxy) startFrameBuffer(now time.Time, seedPacket []byte) {
@@ -438,6 +546,7 @@ func (p *videoProxy) flushFrameBuffer(now time.Time, dest *net.UDPAddr, forced b
 	p.session.videoCounters.videoFramesFlushed.Add(1)
 	if forced {
 		p.session.videoCounters.videoForcedFlushes.Add(1)
+		p.logPacketAnomaly("a->b", p.frameBuffer[0])
 	}
 	p.frameBufferActive = false
 	p.currentFrameTSSet = false
@@ -450,6 +559,7 @@ func (p *videoProxy) sendPacket(packet []byte, dest *net.UDPAddr) {
 	}
 	if err := p.writeToDest(packet, dest); err != nil {
 		p.logger.Error("video b leg write failed", "error", err)
+		p.session.videoCounters.drops.Add(1)
 		return
 	}
 	p.session.videoCounters.bOutPkts.Add(1)
@@ -459,6 +569,7 @@ func (p *videoProxy) sendPacket(packet []byte, dest *net.UDPAddr) {
 func (p *videoProxy) forwardRawPacket(packet []byte, dest *net.UDPAddr) {
 	if err := p.writeToDest(packet, dest); err != nil {
 		p.logger.Error("video b leg write failed", "error", err)
+		p.session.videoCounters.drops.Add(1)
 		return
 	}
 	p.session.videoCounters.bOutPkts.Add(1)
@@ -502,6 +613,7 @@ func (p *videoProxy) sendInjectedPacket(payload []byte, header rtpfix.RTPHeader,
 	copy(packet[12:], payload)
 	if err := p.writeToDest(packet, dest); err != nil {
 		p.logger.Error("video b leg write failed", "error", err)
+		p.session.videoCounters.drops.Add(1)
 		return
 	}
 	p.session.videoCounters.bOutPkts.Add(1)
@@ -557,6 +669,63 @@ func (p *videoProxy) nextFrameTimestamp(now time.Time, seedPacket []byte) uint32
 	p.frameTS += increment
 	p.lastFrameSentTime = now
 	return p.frameTS
+}
+
+func (p *videoProxy) trackSeqGap(packet []byte, lastSeq *uint16, hasLastSeq *bool) (rtpfix.RTPHeader, bool, bool) {
+	header, ok := rtpfix.ParseRTPHeader(packet)
+	if !ok {
+		return rtpfix.RTPHeader{}, false, false
+	}
+	seqGap := false
+	if *hasLastSeq {
+		expected := *lastSeq + 1
+		if header.Seq != expected {
+			seqGap = true
+			p.session.videoCounters.videoSeqGaps.Add(1)
+		}
+	}
+	*lastSeq = header.Seq
+	*hasLastSeq = true
+	return header, true, seqGap
+}
+
+func (p *videoProxy) logPacketIfNeeded(direction string, header rtpfix.RTPHeader, headerOK bool, seqGap bool, size int, packetCount *uint64) {
+	if !p.packetLog {
+		return
+	}
+	*packetCount++
+	logSample := p.packetLogSampleN > 0 && *packetCount%p.packetLogSampleN == 0
+	anomaly := seqGap || !headerOK
+	if anomaly && p.packetLogOnAnomaly {
+		p.logPacket("video.proxy.packet.anomaly", direction, header, size)
+		return
+	}
+	if logSample {
+		p.logPacket("video.proxy.packet", direction, header, size)
+	}
+}
+
+func (p *videoProxy) logPacketAnomaly(direction string, packet []byte) {
+	if !p.packetLog || !p.packetLogOnAnomaly {
+		return
+	}
+	header, ok := rtpfix.ParseRTPHeader(packet)
+	if !ok {
+		header = rtpfix.RTPHeader{}
+	}
+	p.logPacket("video.proxy.packet.anomaly", direction, header, len(packet))
+}
+
+func (p *videoProxy) logPacket(msg, direction string, header rtpfix.RTPHeader, size int) {
+	p.logger.Debug(msg,
+		"direction", direction,
+		"seq", header.Seq,
+		"ts", header.TS,
+		"marker", header.Marker,
+		"pt", header.PT,
+		"ssrc", header.SSRC,
+		"size", size,
+	)
 }
 
 func setMarker(packet []byte, marker bool) {

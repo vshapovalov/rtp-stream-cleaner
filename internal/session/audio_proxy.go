@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"rtp-stream-cleaner/internal/logging"
+	"rtp-stream-cleaner/internal/rtpfix"
 )
 
 const udpReadBufferSize = 2048
@@ -23,6 +24,7 @@ type audioCounters struct {
 	bInBytes  atomic.Uint64
 	aOutPkts  atomic.Uint64
 	aOutBytes atomic.Uint64
+	drops     atomic.Uint64
 }
 
 type AudioCounters struct {
@@ -41,6 +43,10 @@ type audioProxy struct {
 	aConn               *net.UDPConn
 	bConn               *net.UDPConn
 	peerLearningWindow  time.Duration
+	statsInterval       time.Duration
+	packetLog           bool
+	packetLogSampleN    uint64
+	packetLogOnAnomaly  bool
 	logger              *slog.Logger
 	ctx                 context.Context
 	cancel              context.CancelFunc
@@ -51,13 +57,17 @@ type audioProxy struct {
 	lastMissingDestNsec atomic.Int64
 }
 
-func newAudioProxy(session *Session, aConn, bConn *net.UDPConn, peerLearningWindow time.Duration) *audioProxy {
+func newAudioProxy(session *Session, aConn, bConn *net.UDPConn, peerLearningWindow time.Duration, logConfig ProxyLogConfig) *audioProxy {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &audioProxy{
 		session:            session,
 		aConn:              aConn,
 		bConn:              bConn,
 		peerLearningWindow: peerLearningWindow,
+		statsInterval:      logConfig.StatsInterval,
+		packetLog:          logConfig.PacketLog,
+		packetLogSampleN:   logConfig.PacketLogSampleN,
+		packetLogOnAnomaly: logConfig.PacketLogOnAnomaly,
 		logger:             logging.WithSessionID(session.ID),
 		ctx:                ctx,
 		cancel:             cancel,
@@ -74,6 +84,13 @@ func (p *audioProxy) start() {
 		defer p.wg.Done()
 		p.loopBIn()
 	}()
+	if p.statsInterval > 0 {
+		p.wg.Add(1)
+		go func() {
+			defer p.wg.Done()
+			p.logStatsLoop()
+		}()
+	}
 }
 
 func (p *audioProxy) stop() {
@@ -87,6 +104,9 @@ func (p *audioProxy) stop() {
 
 func (p *audioProxy) loopAIn() {
 	buffer := make([]byte, udpReadBufferSize)
+	var packetCount uint64
+	var lastSeq uint16
+	var hasLastSeq bool
 	for {
 		select {
 		case <-p.ctx.Done():
@@ -108,16 +128,20 @@ func (p *audioProxy) loopAIn() {
 		p.session.markActivity(time.Now())
 		p.session.audioCounters.aInPkts.Add(1)
 		p.session.audioCounters.aInBytes.Add(uint64(n))
+		p.logPacketIfNeeded(buffer[:n], n, "a->b", &packetCount, &lastSeq, &hasLastSeq)
 		if !p.updateDoorphonePeer(addr) {
+			p.session.audioCounters.drops.Add(1)
 			continue
 		}
 		dest := p.session.audioDest.Load()
 		if dest == nil {
 			p.logMissingDest()
+			p.session.audioCounters.drops.Add(1)
 			continue
 		}
 		if _, err := p.bConn.WriteToUDP(buffer[:n], dest); err != nil {
 			p.logger.Error("audio b leg write failed", "error", err)
+			p.session.audioCounters.drops.Add(1)
 			continue
 		}
 		p.session.audioCounters.bOutPkts.Add(1)
@@ -127,6 +151,9 @@ func (p *audioProxy) loopAIn() {
 
 func (p *audioProxy) loopBIn() {
 	buffer := make([]byte, udpReadBufferSize)
+	var packetCount uint64
+	var lastSeq uint16
+	var hasLastSeq bool
 	for {
 		select {
 		case <-p.ctx.Done():
@@ -148,16 +175,20 @@ func (p *audioProxy) loopBIn() {
 		p.session.markActivity(time.Now())
 		dest := p.session.audioDest.Load()
 		if dest == nil || !dest.IP.Equal(addr.IP) {
+			p.session.audioCounters.drops.Add(1)
 			continue
 		}
 		p.session.audioCounters.bInPkts.Add(1)
 		p.session.audioCounters.bInBytes.Add(uint64(n))
+		p.logPacketIfNeeded(buffer[:n], n, "b->a", &packetCount, &lastSeq, &hasLastSeq)
 		peer := p.getDoorphonePeer()
 		if peer == nil {
+			p.session.audioCounters.drops.Add(1)
 			continue
 		}
 		if _, err := p.aConn.WriteToUDP(buffer[:n], peer); err != nil {
 			p.logger.Error("audio a leg write failed", "error", err)
+			p.session.audioCounters.drops.Add(1)
 			continue
 		}
 		p.session.audioCounters.aOutPkts.Add(1)
@@ -202,6 +233,91 @@ func (p *audioProxy) logMissingDest() {
 	if p.lastMissingDestNsec.CompareAndSwap(last, now) {
 		p.logger.Warn("audio rtpengine destination not set")
 	}
+}
+
+func (p *audioProxy) logStatsLoop() {
+	ticker := time.NewTicker(p.statsInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			p.logStats(false)
+		case <-p.ctx.Done():
+			p.logStats(true)
+			return
+		}
+	}
+}
+
+func (p *audioProxy) logStats(final bool) {
+	counters := &p.session.audioCounters
+	pktsIn := counters.aInPkts.Load() + counters.bInPkts.Load()
+	pktsOut := counters.aOutPkts.Load() + counters.bOutPkts.Load()
+	bytesIn := counters.aInBytes.Load() + counters.bInBytes.Load()
+	bytesOut := counters.aOutBytes.Load() + counters.bOutBytes.Load()
+	drops := counters.drops.Load()
+	if final {
+		p.logger.Info("audio.proxy.stats",
+			"pkts_in", pktsIn,
+			"pkts_out", pktsOut,
+			"bytes_in", bytesIn,
+			"bytes_out", bytesOut,
+			"drops", drops,
+			"final", true,
+		)
+		return
+	}
+	p.logger.Info("audio.proxy.stats",
+		"pkts_in", pktsIn,
+		"pkts_out", pktsOut,
+		"bytes_in", bytesIn,
+		"bytes_out", bytesOut,
+		"drops", drops,
+	)
+}
+
+func (p *audioProxy) logPacketIfNeeded(packet []byte, size int, direction string, packetCount *uint64, lastSeq *uint16, hasLastSeq *bool) {
+	if !p.packetLog {
+		return
+	}
+	*packetCount++
+	logSample := p.packetLogSampleN > 0 && *packetCount%p.packetLogSampleN == 0
+	if !logSample && !p.packetLogOnAnomaly {
+		return
+	}
+	header, ok := rtpfix.ParseRTPHeader(packet)
+	anomaly := false
+	if !ok {
+		anomaly = true
+	} else {
+		if *hasLastSeq {
+			expected := *lastSeq + 1
+			if header.Seq != expected {
+				anomaly = true
+			}
+		}
+		*lastSeq = header.Seq
+		*hasLastSeq = true
+	}
+	if anomaly && p.packetLogOnAnomaly {
+		p.logPacket("audio.proxy.packet.anomaly", direction, header, size)
+		return
+	}
+	if logSample {
+		p.logPacket("audio.proxy.packet", direction, header, size)
+	}
+}
+
+func (p *audioProxy) logPacket(msg, direction string, header rtpfix.RTPHeader, size int) {
+	p.logger.Debug(msg,
+		"direction", direction,
+		"seq", header.Seq,
+		"ts", header.TS,
+		"marker", header.Marker,
+		"pt", header.PT,
+		"ssrc", header.SSRC,
+		"size", size,
+	)
 }
 
 func snapshotAudioCounters(counters *audioCounters) AudioCounters {
