@@ -3,11 +3,13 @@ package session
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"rtp-stream-cleaner/internal/logging"
 )
 
 const udpReadBufferSize = 2048
@@ -39,6 +41,7 @@ type audioProxy struct {
 	aConn               *net.UDPConn
 	bConn               *net.UDPConn
 	peerLearningWindow  time.Duration
+	logger              *slog.Logger
 	ctx                 context.Context
 	cancel              context.CancelFunc
 	wg                  sync.WaitGroup
@@ -55,6 +58,7 @@ func newAudioProxy(session *Session, aConn, bConn *net.UDPConn, peerLearningWind
 		aConn:              aConn,
 		bConn:              bConn,
 		peerLearningWindow: peerLearningWindow,
+		logger:             logging.WithSessionID(session.ID),
 		ctx:                ctx,
 		cancel:             cancel,
 	}
@@ -98,7 +102,7 @@ func (p *audioProxy) loopAIn() {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				continue
 			}
-			log.Printf("audio a leg read failed session=%s err=%v", p.session.ID, err)
+			p.logger.Error("audio a leg read failed", "error", err)
 			continue
 		}
 		p.session.markActivity(time.Now())
@@ -113,7 +117,7 @@ func (p *audioProxy) loopAIn() {
 			continue
 		}
 		if _, err := p.bConn.WriteToUDP(buffer[:n], dest); err != nil {
-			log.Printf("audio b leg write failed session=%s err=%v", p.session.ID, err)
+			p.logger.Error("audio b leg write failed", "error", err)
 			continue
 		}
 		p.session.audioCounters.bOutPkts.Add(1)
@@ -138,7 +142,7 @@ func (p *audioProxy) loopBIn() {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				continue
 			}
-			log.Printf("audio b leg read failed session=%s err=%v", p.session.ID, err)
+			p.logger.Error("audio b leg read failed", "error", err)
 			continue
 		}
 		p.session.markActivity(time.Now())
@@ -153,7 +157,7 @@ func (p *audioProxy) loopBIn() {
 			continue
 		}
 		if _, err := p.aConn.WriteToUDP(buffer[:n], peer); err != nil {
-			log.Printf("audio a leg write failed session=%s err=%v", p.session.ID, err)
+			p.logger.Error("audio a leg write failed", "error", err)
 			continue
 		}
 		p.session.audioCounters.aOutPkts.Add(1)
@@ -196,7 +200,7 @@ func (p *audioProxy) logMissingDest() {
 		return
 	}
 	if p.lastMissingDestNsec.CompareAndSwap(last, now) {
-		log.Printf("audio rtpengine destination not set session=%s", p.session.ID)
+		p.logger.Warn("audio rtpengine destination not set")
 	}
 }
 

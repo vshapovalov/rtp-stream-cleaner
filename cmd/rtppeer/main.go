@@ -7,7 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"os"
 	"os/signal"
@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"rtp-stream-cleaner/internal/logging"
 	"rtp-stream-cleaner/internal/pcapio"
 	"rtp-stream-cleaner/internal/rtpfix"
 	"rtp-stream-cleaner/internal/rtpparse"
@@ -174,6 +175,7 @@ func run(cfg config) error {
 	if cfg.listSources {
 		return listSources(cfg.sendPCAP)
 	}
+	logger := logging.L()
 	bindIP := net.ParseIP(cfg.bindIP)
 	if bindIP == nil {
 		return fmt.Errorf("invalid bind-ip: %s", cfg.bindIP)
@@ -206,14 +208,14 @@ func run(cfg config) error {
 		recvWriter = writer
 		defer func() {
 			if err := recvWriter.Close(); err != nil {
-				log.Printf("close pcap writer: %v", err)
+				logger.Error("close pcap writer", "error", err)
 			}
 		}()
 	}
 
 	if cfg.verbose {
-		log.Printf("audio socket bound to %s", audioConn.LocalAddr())
-		log.Printf("video socket bound to %s", videoConn.LocalAddr())
+		logger.Info("audio socket bound", "addr", audioConn.LocalAddr())
+		logger.Info("video socket bound", "addr", videoConn.LocalAddr())
 	}
 
 	var stats stats
@@ -221,8 +223,8 @@ func run(cfg config) error {
 
 	if cfg.recvPCAP != "" || cfg.sendPCAP == "" {
 		wg.Add(2)
-		go recvLoop(ctx, "audio", audioConn, recvWriter, cfg.verbose, &stats, &wg)
-		go recvLoop(ctx, "video", videoConn, recvWriter, cfg.verbose, &stats, &wg)
+		go recvLoop(ctx, "audio", audioConn, recvWriter, cfg.verbose, logger, &stats, &wg)
+		go recvLoop(ctx, "video", videoConn, recvWriter, cfg.verbose, logger, &stats, &wg)
 	}
 
 	sendDone := make(chan error, 1)
@@ -230,7 +232,7 @@ func run(cfg config) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sendDone <- sendLoop(ctx, cfg, audioConn, videoConn, &stats)
+			sendDone <- sendLoop(ctx, cfg, audioConn, videoConn, logger, &stats)
 		}()
 	}
 
@@ -252,7 +254,7 @@ func run(cfg config) error {
 	return nil
 }
 
-func recvLoop(ctx context.Context, label string, conn *net.UDPConn, writer *pcapio.Writer, verbose bool, stats *stats, wg *sync.WaitGroup) {
+func recvLoop(ctx context.Context, label string, conn *net.UDPConn, writer *pcapio.Writer, verbose bool, logger *slog.Logger, stats *stats, wg *sync.WaitGroup) {
 	defer wg.Done()
 	buf := make([]byte, 64*1024)
 	for {
@@ -271,7 +273,7 @@ func recvLoop(ctx context.Context, label string, conn *net.UDPConn, writer *pcap
 			if ctx.Err() != nil {
 				return
 			}
-			log.Printf("recv %s error: %v", label, err)
+			logger.Error("recv failed", "label", label, "error", err)
 			continue
 		}
 		atomic.AddInt64(&stats.recvBytes, int64(n))
@@ -283,18 +285,18 @@ func recvLoop(ctx context.Context, label string, conn *net.UDPConn, writer *pcap
 		payload := make([]byte, n)
 		copy(payload, buf[:n])
 		if verbose {
-			log.Printf("recv %s %d bytes from %s", label, n, addr.String())
+			logger.Info("recv packet", "label", label, "bytes", n, "addr", addr.String())
 		}
 		if writer != nil {
 			localAddr := conn.LocalAddr().(*net.UDPAddr)
 			if err := writer.WritePacket(time.Now(), addr.IP, localAddr.IP, addr.Port, localAddr.Port, payload); err != nil {
-				log.Printf("pcap write error: %v", err)
+				logger.Error("pcap write error", "error", err)
 			}
 		}
 	}
 }
 
-func sendLoop(ctx context.Context, cfg config, audioConn, videoConn *net.UDPConn, stats *stats) error {
+func sendLoop(ctx context.Context, cfg config, audioConn, videoConn *net.UDPConn, logger *slog.Logger, stats *stats) error {
 	audioAddr, err := net.ResolveUDPAddr("udp", cfg.audioTo)
 	if err != nil {
 		return fmt.Errorf("resolve audio-to: %w", err)
@@ -356,7 +358,7 @@ func sendLoop(ctx context.Context, cfg config, audioConn, videoConn *net.UDPConn
 		if _, err := conn.WriteToUDP(udpPayload, addr); err != nil {
 			atomic.AddInt64(&stats.sendErrors, 1)
 			if cfg.verbose {
-				log.Printf("send %s error: %v", label, err)
+				logger.Error("send failed", "label", label, "error", err)
 			}
 			continue
 		}
@@ -367,7 +369,7 @@ func sendLoop(ctx context.Context, cfg config, audioConn, videoConn *net.UDPConn
 			atomic.AddInt64(&stats.sentVideoPkts, 1)
 		}
 		if cfg.verbose {
-			log.Printf("sent %s %d bytes to %s", label, len(udpPayload), addr.String())
+			logger.Info("sent packet", "label", label, "bytes", len(udpPayload), "addr", addr.String())
 		}
 	}
 	return nil
