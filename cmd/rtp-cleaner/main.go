@@ -1,28 +1,31 @@
 package main
 
 import (
-	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"rtp-stream-cleaner/internal/api"
 	"rtp-stream-cleaner/internal/config"
+	"rtp-stream-cleaner/internal/logging"
 	"rtp-stream-cleaner/internal/session"
 )
 
 func main() {
 	cfg := config.Load()
+	logger := logging.L()
 
 	if cfg.PublicIP != "" {
-		log.Printf("public_ip=%s", cfg.PublicIP)
+		logger.Info("public_ip configured", "public_ip", cfg.PublicIP)
 	}
 	if cfg.InternalIP != "" {
-		log.Printf("internal_ip=%s", cfg.InternalIP)
+		logger.Info("internal_ip configured", "internal_ip", cfg.InternalIP)
 	}
 
 	allocator, err := session.NewPortAllocator(cfg.RTPPortMin, cfg.RTPPortMax)
 	if err != nil {
-		log.Fatalf("failed to init port allocator: %v", err)
+		logger.Error("failed to init port allocator", "error", err)
+		os.Exit(1)
 	}
 	manager := session.NewManager(
 		allocator,
@@ -42,8 +45,9 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	log.Printf("starting http server on %s", cfg.APIListenAddr)
+	logger.Info("starting http server", "addr", cfg.APIListenAddr)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatalf("server failed: %v", err)
+		logger.Error("server failed", "error", err)
+		os.Exit(1)
 	}
 }

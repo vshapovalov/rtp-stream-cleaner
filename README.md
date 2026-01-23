@@ -34,6 +34,8 @@ PUBLIC_IP=203.0.113.10 ./bin/rtp-cleaner
 | `MAX_FRAME_WAIT_MS` | `120` | Max wait before forcing a video frame flush. |
 | `IDLE_TIMEOUT_SEC` | `60` | Auto-delete sessions after inactivity. |
 | `VIDEO_INJECT_CACHED_SPS_PPS` | `false` | Inject cached SPS/PPS before IDR frames when missing in stream. |
+| `LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, or `error`. |
+| `LOG_FORMAT` | `json` | Log format: `json` or `text`. |
 
 ## API quick reference
 

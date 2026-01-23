@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"log"
+	"log/slog"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"rtp-stream-cleaner/internal/logging"
 	"rtp-stream-cleaner/internal/rtpfix"
 )
 
@@ -55,6 +56,7 @@ type videoProxy struct {
 	bConn               *net.UDPConn
 	peerLearningWindow  time.Duration
 	maxFrameWait        time.Duration
+	logger              *slog.Logger
 	ctx                 context.Context
 	cancel              context.CancelFunc
 	wg                  sync.WaitGroup
@@ -97,6 +99,7 @@ func newVideoProxy(session *Session, aConn, bConn *net.UDPConn, peerLearningWind
 		cancel:             cancel,
 		fixEnabled:         fixEnabled,
 		injectCachedSPSPPS: injectCachedSPSPPS,
+		logger:             logging.WithSessionID(session.ID),
 	}
 	proxy.writeToDest = func(packet []byte, dest *net.UDPAddr) error {
 		if bConn == nil {
@@ -146,7 +149,7 @@ func (p *videoProxy) loopAIn() {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				continue
 			}
-			log.Printf("video a leg read failed session=%s err=%v", p.session.ID, err)
+			p.logger.Error("video a leg read failed", "error", err)
 			continue
 		}
 		p.session.markActivity(time.Now())
@@ -191,7 +194,7 @@ func (p *videoProxy) loopBIn() {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				continue
 			}
-			log.Printf("video b leg read failed session=%s err=%v", p.session.ID, err)
+			p.logger.Error("video b leg read failed", "error", err)
 			continue
 		}
 		p.session.markActivity(time.Now())
@@ -206,7 +209,7 @@ func (p *videoProxy) loopBIn() {
 			continue
 		}
 		if _, err := p.aConn.WriteToUDP(buffer[:n], peer); err != nil {
-			log.Printf("video a leg write failed session=%s err=%v", p.session.ID, err)
+			p.logger.Error("video a leg write failed", "error", err)
 			continue
 		}
 		p.session.videoCounters.aOutPkts.Add(1)
@@ -249,7 +252,7 @@ func (p *videoProxy) logMissingDest() {
 		return
 	}
 	if p.lastMissingDestNsec.CompareAndSwap(last, now) {
-		log.Printf("video rtpengine destination not set session=%s", p.session.ID)
+		p.logger.Warn("video rtpengine destination not set")
 	}
 }
 
@@ -446,7 +449,7 @@ func (p *videoProxy) sendPacket(packet []byte, dest *net.UDPAddr) {
 		p.rewriteSeqForOutput(packet)
 	}
 	if err := p.writeToDest(packet, dest); err != nil {
-		log.Printf("video b leg write failed session=%s err=%v", p.session.ID, err)
+		p.logger.Error("video b leg write failed", "error", err)
 		return
 	}
 	p.session.videoCounters.bOutPkts.Add(1)
@@ -455,7 +458,7 @@ func (p *videoProxy) sendPacket(packet []byte, dest *net.UDPAddr) {
 
 func (p *videoProxy) forwardRawPacket(packet []byte, dest *net.UDPAddr) {
 	if err := p.writeToDest(packet, dest); err != nil {
-		log.Printf("video b leg write failed session=%s err=%v", p.session.ID, err)
+		p.logger.Error("video b leg write failed", "error", err)
 		return
 	}
 	p.session.videoCounters.bOutPkts.Add(1)
@@ -498,7 +501,7 @@ func (p *videoProxy) sendInjectedPacket(payload []byte, header rtpfix.RTPHeader,
 	binary.BigEndian.PutUint32(packet[8:12], header.SSRC)
 	copy(packet[12:], payload)
 	if err := p.writeToDest(packet, dest); err != nil {
-		log.Printf("video b leg write failed session=%s err=%v", p.session.ID, err)
+		p.logger.Error("video b leg write failed", "error", err)
 		return
 	}
 	p.session.videoCounters.bOutPkts.Add(1)
