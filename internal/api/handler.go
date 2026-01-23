@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"rtp-stream-cleaner/internal/config"
+	"rtp-stream-cleaner/internal/logging"
 	"rtp-stream-cleaner/internal/session"
 )
 
@@ -135,15 +136,18 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 	if h.publicIP == "" {
+		logging.L().Warn("session.create failed", "error", "PUBLIC_IP is required")
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "PUBLIC_IP is required"})
 		return
 	}
 	var req createSessionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		logging.L().Warn("session.create failed", "error", err)
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid json body"})
 		return
 	}
 	if req.CallID == "" || req.FromTag == "" || req.ToTag == "" {
+		logging.L().Warn("session.create failed", "error", "call_id, from_tag, and to_tag are required")
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "call_id, from_tag, and to_tag are required"})
 		return
 	}
@@ -158,6 +162,7 @@ func (h *Handler) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, session.ErrNoPortsAvailable) {
 			status = http.StatusServiceUnavailable
 		}
+		logging.L().Error("session.create failed", "error", err, "call_id", req.CallID, "from_tag", req.FromTag, "to_tag", req.ToTag)
 		writeJSON(w, status, errorResponse{Error: err.Error()})
 		return
 	}
@@ -174,6 +179,29 @@ func (h *Handler) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 			BPort: created.Video.BPort,
 		},
 	}
+	logging.WithSessionID(created.ID).Info(
+		"session.create",
+		"call_id",
+		created.CallID,
+		"from_tag",
+		created.FromTag,
+		"to_tag",
+		created.ToTag,
+		"audio_enabled",
+		req.Audio.Enable,
+		"video_enabled",
+		req.Video.Enable,
+		"video_fix",
+		videoFix,
+		"audio_a_port",
+		created.Audio.APort,
+		"audio_b_port",
+		created.Audio.BPort,
+		"video_a_port",
+		created.Video.APort,
+		"video_b_port",
+		created.Video.BPort,
+	)
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -259,6 +287,7 @@ func (h *Handler) handleSessionGet(w http.ResponseWriter, r *http.Request, id st
 func (h *Handler) handleSessionUpdate(w http.ResponseWriter, r *http.Request, id string) {
 	var req updateSessionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		logging.WithSessionID(id).Warn("session.update failed", "error", err)
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid json body"})
 		return
 	}
@@ -266,6 +295,7 @@ func (h *Handler) handleSessionUpdate(w http.ResponseWriter, r *http.Request, id
 	if req.Audio != nil && req.Audio.RTPEngineDest != nil {
 		parsed, err := parseDest(*req.Audio.RTPEngineDest)
 		if err != nil {
+			logging.WithSessionID(id).Warn("session.update failed", "error", err, "field", "audio.rtpengine_dest")
 			writeJSON(w, http.StatusBadRequest, errorResponse{Error: fmt.Sprintf("audio rtpengine_dest %s", err)})
 			return
 		}
@@ -275,6 +305,7 @@ func (h *Handler) handleSessionUpdate(w http.ResponseWriter, r *http.Request, id
 	if req.Video != nil && req.Video.RTPEngineDest != nil {
 		parsed, err := parseDest(*req.Video.RTPEngineDest)
 		if err != nil {
+			logging.WithSessionID(id).Warn("session.update failed", "error", err, "field", "video.rtpengine_dest")
 			writeJSON(w, http.StatusBadRequest, errorResponse{Error: fmt.Sprintf("video rtpengine_dest %s", err)})
 			return
 		}
@@ -282,6 +313,7 @@ func (h *Handler) handleSessionUpdate(w http.ResponseWriter, r *http.Request, id
 	}
 	updated, ok := h.manager.UpdateRTPDest(id, audioDest, videoDest)
 	if !ok {
+		logging.WithSessionID(id).Warn("session.update failed", "error", "session not found")
 		writeJSON(w, http.StatusNotFound, errorResponse{Error: "session not found"})
 		return
 	}
@@ -328,14 +360,32 @@ func (h *Handler) handleSessionUpdate(w http.ResponseWriter, r *http.Request, id
 			RTPEngineDest: formatDest(updated.Video.RTPEngineDest),
 		},
 	}
+	logAttrs := []any{}
+	if audioDest != nil {
+		logAttrs = append(logAttrs, "audio_dest", audioDest.String())
+	}
+	if videoDest != nil {
+		logAttrs = append(logAttrs, "video_dest", videoDest.String())
+	}
+	logging.WithSessionID(id).Info("session.update", logAttrs...)
 	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) handleSessionDelete(w http.ResponseWriter, r *http.Request, id string) {
+	var duration time.Duration
+	if found, ok := h.manager.Get(id); ok && !found.CreatedAt.IsZero() {
+		duration = time.Since(found.CreatedAt)
+	}
 	if deleted := h.manager.Delete(id); !deleted {
+		logging.WithSessionID(id).Warn("session.delete failed", "error", "session not found")
 		writeJSON(w, http.StatusNotFound, errorResponse{Error: "session not found"})
 		return
 	}
+	logAttrs := []any{"reason", "api"}
+	if duration > 0 {
+		logAttrs = append(logAttrs, "duration", duration)
+	}
+	logging.WithSessionID(id).Info("session.delete", logAttrs...)
 	w.WriteHeader(http.StatusOK)
 }
 
