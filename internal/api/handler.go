@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"rtp-stream-cleaner/internal/config"
@@ -40,9 +39,12 @@ func NewHandler(cfg config.Config, manager SessionManager) *Handler {
 }
 
 func (h *Handler) Register(mux *http.ServeMux) {
-	mux.HandleFunc("/v1/health", h.handleHealth)
-	mux.HandleFunc("/v1/session", h.handleSessionCreate)
-	mux.HandleFunc("/v1/session/", h.handleSessionByID)
+	mux.HandleFunc("GET /v1/health", h.handleHealth)
+	mux.HandleFunc("POST /v1/session", h.handleSessionCreate)
+	mux.HandleFunc("GET /v1/session/{id}", h.handleSessionGetByID)
+	mux.HandleFunc("DELETE /v1/session/{id}", h.handleSessionDeleteByID)
+	mux.HandleFunc("POST /v1/session/{id}/update", h.handleSessionUpdateByID)
+	mux.HandleFunc("POST /v1/session/{id}/delete", h.handleSessionDeleteByID)
 }
 
 type createSessionRequest struct {
@@ -127,21 +129,11 @@ type errorResponse struct {
 }
 
 func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ok"))
 }
 
 func (h *Handler) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if h.publicIP == "" {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "PUBLIC_IP is required"})
 		return
@@ -185,40 +177,31 @@ func (h *Handler) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (h *Handler) handleSessionByID(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/v1/session/")
-	if path == "" {
+func (h *Handler) handleSessionGetByID(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
 		http.NotFound(w, r)
 		return
 	}
-	parts := strings.Split(path, "/")
-	if len(parts) > 2 || parts[0] == "" {
+	h.handleSessionGet(w, r, id)
+}
+
+func (h *Handler) handleSessionUpdateByID(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
 		http.NotFound(w, r)
 		return
 	}
-	id := parts[0]
-	if len(parts) == 2 {
-		if parts[1] != "update" {
-			http.NotFound(w, r)
-			return
-		}
-		if r.Method != http.MethodPost {
-			w.Header().Set("Allow", http.MethodPost)
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		h.handleSessionUpdate(w, r, id)
+	h.handleSessionUpdate(w, r, id)
+}
+
+func (h *Handler) handleSessionDeleteByID(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		http.NotFound(w, r)
 		return
 	}
-	switch r.Method {
-	case http.MethodGet:
-		h.handleSessionGet(w, r, id)
-	case http.MethodDelete:
-		h.handleSessionDelete(w, r, id)
-	default:
-		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodDelete}, ", "))
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
+	h.handleSessionDelete(w, r, id)
 }
 
 func (h *Handler) handleSessionGet(w http.ResponseWriter, r *http.Request, id string) {
