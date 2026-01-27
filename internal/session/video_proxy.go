@@ -34,6 +34,7 @@ type videoCounters struct {
 	videoNalParseErrors atomic.Uint64
 	videoSeqGaps        atomic.Uint64
 	drops               atomic.Uint64
+	ignoredDisabled     atomic.Uint64
 }
 
 type VideoCounters struct {
@@ -177,6 +178,10 @@ func (p *videoProxy) loopAIn() {
 		p.session.markActivity(time.Now())
 		p.session.videoCounters.aInPkts.Add(1)
 		p.session.videoCounters.aInBytes.Add(uint64(n))
+		if !p.session.videoEnabled.Load() {
+			p.session.videoCounters.ignoredDisabled.Add(1)
+			continue
+		}
 		header, headerOK, seqGap := p.trackSeqGap(buffer[:n], &lastSeq, &hasLastSeq)
 		p.logPacketIfNeeded("a->b", header, headerOK, seqGap, n, &packetCount)
 		if p.fixEnabled {
@@ -227,6 +232,10 @@ func (p *videoProxy) loopBIn() {
 			continue
 		}
 		p.session.markActivity(time.Now())
+		if !p.session.videoEnabled.Load() {
+			p.session.videoCounters.ignoredDisabled.Add(1)
+			continue
+		}
 		dest := p.session.videoDest.Load()
 		if dest == nil || !dest.IP.Equal(addr.IP) {
 			p.session.videoCounters.drops.Add(1)
@@ -311,12 +320,18 @@ func (p *videoProxy) logStats(final bool) {
 	bytesIn := counters.aInBytes.Load() + counters.bInBytes.Load()
 	bytesOut := counters.aOutBytes.Load() + counters.bOutBytes.Load()
 	drops := counters.drops.Load()
+	ignoredDisabled := counters.ignoredDisabled.Load()
 	frames := counters.videoFramesStarted.Load()
 	keyframes := counters.videoKeyframes.Load()
 	spsPpsInjected := counters.videoInjectedSPS.Load() + counters.videoInjectedPPS.Load()
 	forcedFlushes := counters.videoForcedFlushes.Load()
 	nalParseErrors := counters.videoNalParseErrors.Load()
 	seqGaps := counters.videoSeqGaps.Load()
+	enabled := p.session.videoEnabled.Load()
+	disabledReason := loadAtomicString(&p.session.videoDisabledReason)
+	if enabled {
+		disabledReason = ""
+	}
 	if final {
 		p.logger.Info("video.proxy.stats",
 			"pkts_in", pktsIn,
@@ -324,6 +339,9 @@ func (p *videoProxy) logStats(final bool) {
 			"bytes_in", bytesIn,
 			"bytes_out", bytesOut,
 			"drops", drops,
+			"ignored_disabled", ignoredDisabled,
+			"enabled", enabled,
+			"disabled_reason", disabledReason,
 			"frames", frames,
 			"keyframes", keyframes,
 			"sps_pps_injected", spsPpsInjected,
@@ -340,6 +358,9 @@ func (p *videoProxy) logStats(final bool) {
 		"bytes_in", bytesIn,
 		"bytes_out", bytesOut,
 		"drops", drops,
+		"ignored_disabled", ignoredDisabled,
+		"enabled", enabled,
+		"disabled_reason", disabledReason,
 		"frames", frames,
 		"keyframes", keyframes,
 		"sps_pps_injected", spsPpsInjected,

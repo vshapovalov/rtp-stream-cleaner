@@ -16,15 +16,16 @@ import (
 const udpReadBufferSize = 2048
 
 type audioCounters struct {
-	aInPkts   atomic.Uint64
-	aInBytes  atomic.Uint64
-	bOutPkts  atomic.Uint64
-	bOutBytes atomic.Uint64
-	bInPkts   atomic.Uint64
-	bInBytes  atomic.Uint64
-	aOutPkts  atomic.Uint64
-	aOutBytes atomic.Uint64
-	drops     atomic.Uint64
+	aInPkts         atomic.Uint64
+	aInBytes        atomic.Uint64
+	bOutPkts        atomic.Uint64
+	bOutBytes       atomic.Uint64
+	bInPkts         atomic.Uint64
+	bInBytes        atomic.Uint64
+	aOutPkts        atomic.Uint64
+	aOutBytes       atomic.Uint64
+	drops           atomic.Uint64
+	ignoredDisabled atomic.Uint64
 }
 
 type AudioCounters struct {
@@ -128,6 +129,10 @@ func (p *audioProxy) loopAIn() {
 		p.session.markActivity(time.Now())
 		p.session.audioCounters.aInPkts.Add(1)
 		p.session.audioCounters.aInBytes.Add(uint64(n))
+		if !p.session.audioEnabled.Load() {
+			p.session.audioCounters.ignoredDisabled.Add(1)
+			continue
+		}
 		p.logPacketIfNeeded(buffer[:n], n, "a->b", &packetCount, &lastSeq, &hasLastSeq)
 		if !p.updateDoorphonePeer(addr) {
 			p.session.audioCounters.drops.Add(1)
@@ -173,6 +178,10 @@ func (p *audioProxy) loopBIn() {
 			continue
 		}
 		p.session.markActivity(time.Now())
+		if !p.session.audioEnabled.Load() {
+			p.session.audioCounters.ignoredDisabled.Add(1)
+			continue
+		}
 		dest := p.session.audioDest.Load()
 		if dest == nil || !dest.IP.Equal(addr.IP) {
 			p.session.audioCounters.drops.Add(1)
@@ -256,6 +265,12 @@ func (p *audioProxy) logStats(final bool) {
 	bytesIn := counters.aInBytes.Load() + counters.bInBytes.Load()
 	bytesOut := counters.aOutBytes.Load() + counters.bOutBytes.Load()
 	drops := counters.drops.Load()
+	ignoredDisabled := counters.ignoredDisabled.Load()
+	enabled := p.session.audioEnabled.Load()
+	disabledReason := loadAtomicString(&p.session.audioDisabledReason)
+	if enabled {
+		disabledReason = ""
+	}
 	if final {
 		p.logger.Info("audio.proxy.stats",
 			"pkts_in", pktsIn,
@@ -263,6 +278,9 @@ func (p *audioProxy) logStats(final bool) {
 			"bytes_in", bytesIn,
 			"bytes_out", bytesOut,
 			"drops", drops,
+			"ignored_disabled", ignoredDisabled,
+			"enabled", enabled,
+			"disabled_reason", disabledReason,
 			"final", true,
 		)
 		return
@@ -273,6 +291,9 @@ func (p *audioProxy) logStats(final bool) {
 		"bytes_in", bytesIn,
 		"bytes_out", bytesOut,
 		"drops", drops,
+		"ignored_disabled", ignoredDisabled,
+		"enabled", enabled,
+		"disabled_reason", disabledReason,
 	)
 }
 

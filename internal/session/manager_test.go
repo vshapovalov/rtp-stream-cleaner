@@ -105,6 +105,61 @@ func TestManager_UpdateSetsDestIndependentlyAudioVideo(t *testing.T) {
 	}
 }
 
+// TestManager_UpdateRTPDest_DisablesMediaOnPortZero verifies that a port 0
+// destination disables the media, clears the destination, and sets a disabled
+// reason. This matters because SDP can signal disabled media via port 0 and the
+// manager must reflect that state. Preconditions: a created session. Inputs:
+// update with a valid video destination, then update with port 0. Edge case:
+// switching from enabled to disabled should clear the stored destination. The
+// expected output is enabled true with empty reason after the first update, and
+// enabled false with nil destination and reason "rtpengine_port_0" after the
+// second update. Assertions are stable because updates are synchronous under
+// the manager lock. Flakiness is avoided by removing background goroutines and
+// network usage. A regression would keep the destination set or fail to update
+// enabled/disabled flags.
+func TestManager_UpdateRTPDest_DisablesMediaOnPortZero(t *testing.T) {
+	manager := newTestManager(t, 0)
+	created, err := manager.Create("call-6", "from-6", "to-6", false)
+	if err != nil {
+		t.Fatalf("unexpected create error: %v", err)
+	}
+	videoDest := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 2), Port: 9002}
+	if _, ok := manager.UpdateRTPDest(created.ID, nil, videoDest); !ok {
+		t.Fatalf("expected update to succeed")
+	}
+	enabledSession, ok := manager.Get(created.ID)
+	if !ok {
+		t.Fatalf("expected session to be present")
+	}
+	if !enabledSession.Video.Enabled {
+		t.Fatalf("expected video to be enabled")
+	}
+	if enabledSession.Video.DisabledReason != "" {
+		t.Fatalf("expected empty disabled reason, got %q", enabledSession.Video.DisabledReason)
+	}
+	if enabledSession.Video.RTPEngineDest == nil {
+		t.Fatalf("expected video dest to be set")
+	}
+
+	disableDest := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 2), Port: 0}
+	if _, ok := manager.UpdateRTPDest(created.ID, nil, disableDest); !ok {
+		t.Fatalf("expected update to succeed")
+	}
+	disabledSession, ok := manager.Get(created.ID)
+	if !ok {
+		t.Fatalf("expected session to be present")
+	}
+	if disabledSession.Video.Enabled {
+		t.Fatalf("expected video to be disabled")
+	}
+	if disabledSession.Video.DisabledReason != "rtpengine_port_0" {
+		t.Fatalf("expected disabled reason %q, got %q", "rtpengine_port_0", disabledSession.Video.DisabledReason)
+	}
+	if disabledSession.Video.RTPEngineDest != nil {
+		t.Fatalf("expected video dest to be nil when disabled")
+	}
+}
+
 // TestManager_DeleteRemovesSession ensures that Delete removes a session from
 // the manager and returns true for existing IDs. This matters because cleanup
 // must release resources and prevent future lookups. Preconditions: a manager

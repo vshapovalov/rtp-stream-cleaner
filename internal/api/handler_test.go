@@ -243,6 +243,48 @@ func TestAPI_UpdateSession_PartialUpdate_CallsManagerCorrectly(t *testing.T) {
 	})
 }
 
+// TestAPI_UpdateSession_AllowsPortZero verifies that update accepts
+// rtpengine_dest with port 0 to disable media. This matters because SDP can
+// signal disabled video with port 0 and the API must still apply audio updates.
+// Preconditions: handler with a mock manager that returns a valid session.
+// Inputs: POST with video rtpengine_dest of 0.0.0.0:0. Edge case: port 0 is a
+// valid value for disabling media. The expected output is HTTP 200 and a
+// parsed destination with port 0 forwarded to the manager. Assertions are
+// stable because parseDest deterministically handles the port range. Flakiness
+// is avoided by using httptest and deterministic mocks. A regression would
+// return HTTP 400 or parse a non-zero port.
+func TestAPI_UpdateSession_AllowsPortZero(t *testing.T) {
+	manager := &mockManager{updateOK: true}
+	manager.updateResult = &session.Session{
+		ID:      "sess-zero",
+		CallID:  "call-zero",
+		FromTag: "from-zero",
+		ToTag:   "to-zero",
+		Audio:   session.Media{APort: 12000, BPort: 12001},
+		Video:   session.Media{APort: 12002, BPort: 12003},
+	}
+	handler := newTestHandler(manager)
+
+	payload := map[string]map[string]string{
+		"video": {"rtpengine_dest": "0.0.0.0:0"},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("unexpected marshal error: %v", err)
+	}
+	recorder := performRequest(handler, http.MethodPost, "/v1/session/sess-zero/update", bytes.NewBuffer(body))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+	if manager.updateInput.videoDest == nil {
+		t.Fatalf("expected video destination to be set")
+	}
+	if manager.updateInput.videoDest.Port != 0 {
+		t.Fatalf("expected video destination port 0, got %d", manager.updateInput.videoDest.Port)
+	}
+}
+
 // TestAPI_DeleteSession_UnknownID_404 verifies that deleting a non-existent
 // session returns HTTP 404 and does not report success. This matters because
 // callers need accurate feedback when an ID is stale. Preconditions: handler
