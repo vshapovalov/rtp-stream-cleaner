@@ -13,31 +13,37 @@ import (
 )
 
 type Media struct {
-	APort         int
-	BPort         int
-	RTPEngineDest *net.UDPAddr
+	APort          int
+	BPort          int
+	RTPEngineDest  *net.UDPAddr
+	Enabled        bool
+	DisabledReason string
 }
 
 type Session struct {
-	ID               string
-	CallID           string
-	FromTag          string
-	ToTag            string
-	CreatedAt        time.Time
-	Audio            Media
-	Video            Media
-	LastActivity     time.Time
-	State            string
-	AudioCounters    AudioCounters
-	VideoCounters    VideoCounters
-	audioProxy       sessionProxy
-	audioCounters    audioCounters
-	audioDest        atomic.Pointer[net.UDPAddr]
-	videoProxy       sessionProxy
-	videoCounters    videoCounters
-	videoDest        atomic.Pointer[net.UDPAddr]
-	lastActivityNsec atomic.Int64
-	state            atomic.Int32
+	ID                  string
+	CallID              string
+	FromTag             string
+	ToTag               string
+	CreatedAt           time.Time
+	Audio               Media
+	Video               Media
+	LastActivity        time.Time
+	State               string
+	AudioCounters       AudioCounters
+	VideoCounters       VideoCounters
+	audioProxy          sessionProxy
+	audioCounters       audioCounters
+	audioDest           atomic.Pointer[net.UDPAddr]
+	audioEnabled        atomic.Bool
+	audioDisabledReason atomic.Value
+	videoProxy          sessionProxy
+	videoCounters       videoCounters
+	videoDest           atomic.Pointer[net.UDPAddr]
+	videoEnabled        atomic.Bool
+	videoDisabledReason atomic.Value
+	lastActivityNsec    atomic.Int64
+	state               atomic.Int32
 }
 
 type Manager struct {
@@ -132,18 +138,26 @@ func (m *Manager) Create(callID, fromTag, toTag string, videoFix bool) (*Session
 		ToTag:     toTag,
 		CreatedAt: m.now(),
 		Audio: Media{
-			APort: ports[0],
-			BPort: ports[1],
+			APort:          ports[0],
+			BPort:          ports[1],
+			Enabled:        true,
+			DisabledReason: "",
 		},
 		Video: Media{
-			APort: ports[2],
-			BPort: ports[3],
+			APort:          ports[2],
+			BPort:          ports[3],
+			Enabled:        true,
+			DisabledReason: "",
 		},
 	}
 	session.setState(stateCreated)
 	session.setLastActivity(m.now())
 	session.audioDest.Store((*net.UDPAddr)(nil))
 	session.videoDest.Store((*net.UDPAddr)(nil))
+	session.audioEnabled.Store(true)
+	session.videoEnabled.Store(true)
+	session.audioDisabledReason.Store("")
+	session.videoDisabledReason.Store("")
 
 	aConn, err := m.listenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: session.Audio.APort})
 	if err != nil {
@@ -222,14 +236,40 @@ func (m *Manager) UpdateRTPDest(id string, audioDest, videoDest *net.UDPAddr) (*
 		return nil, false
 	}
 	if audioDest != nil {
-		clone := cloneUDPAddr(audioDest)
-		session.Audio.RTPEngineDest = clone
-		session.audioDest.Store(clone)
+		if audioDest.Port == 0 {
+			session.Audio.RTPEngineDest = nil
+			session.Audio.Enabled = false
+			session.Audio.DisabledReason = "rtpengine_port_0"
+			session.audioEnabled.Store(false)
+			session.audioDisabledReason.Store("rtpengine_port_0")
+			session.audioDest.Store((*net.UDPAddr)(nil))
+		} else {
+			clone := cloneUDPAddr(audioDest)
+			session.Audio.RTPEngineDest = clone
+			session.Audio.Enabled = true
+			session.Audio.DisabledReason = ""
+			session.audioEnabled.Store(true)
+			session.audioDisabledReason.Store("")
+			session.audioDest.Store(clone)
+		}
 	}
 	if videoDest != nil {
-		clone := cloneUDPAddr(videoDest)
-		session.Video.RTPEngineDest = clone
-		session.videoDest.Store(clone)
+		if videoDest.Port == 0 {
+			session.Video.RTPEngineDest = nil
+			session.Video.Enabled = false
+			session.Video.DisabledReason = "rtpengine_port_0"
+			session.videoEnabled.Store(false)
+			session.videoDisabledReason.Store("rtpengine_port_0")
+			session.videoDest.Store((*net.UDPAddr)(nil))
+		} else {
+			clone := cloneUDPAddr(videoDest)
+			session.Video.RTPEngineDest = clone
+			session.Video.Enabled = true
+			session.Video.DisabledReason = ""
+			session.videoEnabled.Store(true)
+			session.videoDisabledReason.Store("")
+			session.videoDest.Store(clone)
+		}
 	}
 	return cloneSession(session), true
 }
@@ -266,6 +306,10 @@ func cloneSession(session *Session) *Session {
 	clone.State = session.stateString()
 	clone.Audio = cloneMedia(session.Audio)
 	clone.Video = cloneMedia(session.Video)
+	clone.Audio.Enabled = session.audioEnabled.Load()
+	clone.Audio.DisabledReason = loadAtomicString(&session.audioDisabledReason)
+	clone.Video.Enabled = session.videoEnabled.Load()
+	clone.Video.DisabledReason = loadAtomicString(&session.videoDisabledReason)
 	clone.AudioCounters = snapshotAudioCounters(&session.audioCounters)
 	clone.VideoCounters = snapshotVideoCounters(&session.videoCounters)
 	return &clone
@@ -286,6 +330,21 @@ func cloneUDPAddr(addr *net.UDPAddr) *net.UDPAddr {
 	}
 	clone := *addr
 	return &clone
+}
+
+func loadAtomicString(value *atomic.Value) string {
+	if value == nil {
+		return ""
+	}
+	loaded := value.Load()
+	if loaded == nil {
+		return ""
+	}
+	parsed, ok := loaded.(string)
+	if !ok {
+		return ""
+	}
+	return parsed
 }
 
 func (m *Manager) Close() {

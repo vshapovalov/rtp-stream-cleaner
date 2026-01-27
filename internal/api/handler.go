@@ -76,9 +76,11 @@ type portResponse struct {
 }
 
 type mediaStateResponse struct {
-	APort         int    `json:"a_port"`
-	BPort         int    `json:"b_port"`
-	RTPEngineDest string `json:"rtpengine_dest"`
+	APort          int    `json:"a_port"`
+	BPort          int    `json:"b_port"`
+	RTPEngineDest  string `json:"rtpengine_dest"`
+	Enabled        bool   `json:"enabled"`
+	DisabledReason string `json:"disabled_reason,omitempty"`
 }
 
 type createSessionResponse struct {
@@ -271,14 +273,18 @@ func (h *Handler) handleSessionGet(w http.ResponseWriter, r *http.Request, id st
 		LastActivity:       formatTime(found.LastActivity),
 		State:              found.State,
 		Audio: mediaStateResponse{
-			APort:         found.Audio.APort,
-			BPort:         found.Audio.BPort,
-			RTPEngineDest: formatDest(found.Audio.RTPEngineDest),
+			APort:          found.Audio.APort,
+			BPort:          found.Audio.BPort,
+			RTPEngineDest:  formatDest(found.Audio.RTPEngineDest),
+			Enabled:        found.Audio.Enabled,
+			DisabledReason: found.Audio.DisabledReason,
 		},
 		Video: mediaStateResponse{
-			APort:         found.Video.APort,
-			BPort:         found.Video.BPort,
-			RTPEngineDest: formatDest(found.Video.RTPEngineDest),
+			APort:          found.Video.APort,
+			BPort:          found.Video.BPort,
+			RTPEngineDest:  formatDest(found.Video.RTPEngineDest),
+			Enabled:        found.Video.Enabled,
+			DisabledReason: found.Video.DisabledReason,
 		},
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -350,14 +356,18 @@ func (h *Handler) handleSessionUpdate(w http.ResponseWriter, r *http.Request, id
 		LastActivity:       formatTime(updated.LastActivity),
 		State:              updated.State,
 		Audio: mediaStateResponse{
-			APort:         updated.Audio.APort,
-			BPort:         updated.Audio.BPort,
-			RTPEngineDest: formatDest(updated.Audio.RTPEngineDest),
+			APort:          updated.Audio.APort,
+			BPort:          updated.Audio.BPort,
+			RTPEngineDest:  formatDest(updated.Audio.RTPEngineDest),
+			Enabled:        updated.Audio.Enabled,
+			DisabledReason: updated.Audio.DisabledReason,
 		},
 		Video: mediaStateResponse{
-			APort:         updated.Video.APort,
-			BPort:         updated.Video.BPort,
-			RTPEngineDest: formatDest(updated.Video.RTPEngineDest),
+			APort:          updated.Video.APort,
+			BPort:          updated.Video.BPort,
+			RTPEngineDest:  formatDest(updated.Video.RTPEngineDest),
+			Enabled:        updated.Video.Enabled,
+			DisabledReason: updated.Video.DisabledReason,
 		},
 	}
 	logAttrs := []any{}
@@ -398,14 +408,14 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 func parseDest(raw string) (*net.UDPAddr, error) {
 	host, port, err := net.SplitHostPort(raw)
 	if err != nil {
-		return nil, fmt.Errorf("must be in ip:port format with port 1..65535")
+		return nil, fmt.Errorf("must be in ip:port format with port 0..65535 (0 disables media)")
 	}
 	if net.ParseIP(host) == nil {
-		return nil, fmt.Errorf("must be in ip:port format with port 1..65535")
+		return nil, fmt.Errorf("must be in ip:port format with port 0..65535 (0 disables media)")
 	}
 	portValue, err := strconv.Atoi(port)
-	if err != nil || portValue < 1 || portValue > 65535 {
-		return nil, fmt.Errorf("must be in ip:port format with port 1..65535")
+	if err != nil || portValue < 0 || portValue > 65535 {
+		return nil, fmt.Errorf("must be in ip:port format with port 0..65535 (0 disables media)")
 	}
 	return &net.UDPAddr{IP: net.ParseIP(host), Port: portValue}, nil
 }

@@ -300,6 +300,12 @@ components:
           $ref: '#/components/schemas/Port'
         rtpengine_dest:
           $ref: '#/components/schemas/RtpEngineDest'
+        enabled:
+          type: boolean
+          description: Indicates whether the media stream is enabled for proxying.
+        disabled_reason:
+          type: string
+          description: Reason why the media stream is disabled (empty when enabled).
 
     DoorphonePeer:
       type: object
@@ -336,3 +342,4 @@ components:
     RtpEngineDest:
       type: string
       pattern: '^[0-9.]+:[0-9]+$'
+      description: IPv4 address and port (0..65535). Port 0 disables media for this stream.
