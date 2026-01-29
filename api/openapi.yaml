@@ -247,6 +247,8 @@ components:
       properties:
         enable:
           type: boolean
+        rtpengine_dest:
+          $ref: '#/components/schemas/RtpEngineDest'
         fix:
           type: boolean
           default: true

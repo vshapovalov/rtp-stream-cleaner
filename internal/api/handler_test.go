@@ -24,6 +24,18 @@ type mockManager struct {
 	createResult *session.Session
 	createErr    error
 
+	createWithDestCalls int
+	createWithDestInput struct {
+		callID           string
+		fromTag          string
+		toTag            string
+		videoFix         bool
+		initialAudioDest *net.UDPAddr
+		initialVideoDest *net.UDPAddr
+	}
+	createWithDestResult *session.Session
+	createWithDestErr    error
+
 	updateCalls int
 	updateInput struct {
 		id        string
@@ -45,6 +57,17 @@ func (m *mockManager) Create(callID, fromTag, toTag string, videoFix bool) (*ses
 	m.createInput.toTag = toTag
 	m.createInput.videoFix = videoFix
 	return m.createResult, m.createErr
+}
+
+func (m *mockManager) CreateWithInitialDest(callID, fromTag, toTag string, videoFix bool, initialAudioDest, initialVideoDest *net.UDPAddr) (*session.Session, error) {
+	m.createWithDestCalls++
+	m.createWithDestInput.callID = callID
+	m.createWithDestInput.fromTag = fromTag
+	m.createWithDestInput.toTag = toTag
+	m.createWithDestInput.videoFix = videoFix
+	m.createWithDestInput.initialAudioDest = initialAudioDest
+	m.createWithDestInput.initialVideoDest = initialVideoDest
+	return m.createWithDestResult, m.createWithDestErr
 }
 
 func (m *mockManager) Get(id string) (*session.Session, bool) {
@@ -132,6 +155,123 @@ func TestAPI_CreateSession_MissingFields_400(t *testing.T) {
 	}
 	if manager.createCalls != 0 {
 		t.Fatalf("expected Create not to be called")
+	}
+}
+
+// TestAPI_CreateSession_WithAudioInitialDest verifies that the create-session
+// handler forwards an optional audio rtpengine_dest when supplied. This matters
+// because callers should be able to set the initial destination without a
+// follow-up update request. Preconditions: handler with a mock manager.
+// Inputs: POST payload with audio rtpengine_dest and required identifiers.
+// Edge case: video rtpengine_dest omitted. The expected output is HTTP 200 and
+// a CreateWithInitialDest call carrying only the audio destination. Assertions
+// are stable because parseDest deterministically parses the address. Flakiness
+// is avoided by using httptest without timers. A regression would call Create
+// or pass a non-nil video destination.
+func TestAPI_CreateSession_WithAudioInitialDest(t *testing.T) {
+	manager := &mockManager{}
+	manager.createWithDestResult = &session.Session{
+		ID:      "sess-audio-dest",
+		CallID:  "call-audio",
+		FromTag: "from-audio",
+		ToTag:   "to-audio",
+		Audio:   session.Media{APort: 13000, BPort: 13001},
+		Video:   session.Media{APort: 13002, BPort: 13003},
+	}
+	handler := newTestHandler(manager)
+
+	payload := map[string]any{
+		"call_id":  "call-audio",
+		"from_tag": "from-audio",
+		"to_tag":   "to-audio",
+		"audio": map[string]any{
+			"enable":         true,
+			"rtpengine_dest": "192.0.2.30:40100",
+		},
+		"video": map[string]any{
+			"enable": true,
+		},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("unexpected marshal error: %v", err)
+	}
+	recorder := performRequest(handler, http.MethodPost, "/v1/session", bytes.NewBuffer(body))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+	if manager.createWithDestCalls != 1 {
+		t.Fatalf("expected CreateWithInitialDest to be called once")
+	}
+	if manager.createCalls != 0 {
+		t.Fatalf("expected Create not to be called")
+	}
+	if manager.createWithDestInput.initialAudioDest == nil {
+		t.Fatalf("expected initial audio dest to be set")
+	}
+	if manager.createWithDestInput.initialAudioDest.Port != 40100 {
+		t.Fatalf("expected audio dest port 40100, got %d", manager.createWithDestInput.initialAudioDest.Port)
+	}
+	if manager.createWithDestInput.initialVideoDest != nil {
+		t.Fatalf("expected initial video dest to be nil")
+	}
+}
+
+// TestAPI_CreateSession_AllowsVideoPortZero verifies that create accepts a
+// video rtpengine_dest with port 0 to disable media on creation. This matters
+// because SDP can signal disabled video and the API must accept it without a
+// separate update call. Preconditions: handler with a mock manager. Inputs:
+// POST payload with video rtpengine_dest 0.0.0.0:0 and required identifiers.
+// Edge case: audio destination omitted. The expected output is HTTP 200 and a
+// CreateWithInitialDest call carrying a video destination with port 0.
+// Assertions are stable because parseDest deterministically handles port 0.
+// Flakiness is avoided by using httptest without concurrency. A regression
+// would return HTTP 400 or pass a non-zero port.
+func TestAPI_CreateSession_AllowsVideoPortZero(t *testing.T) {
+	manager := &mockManager{}
+	manager.createWithDestResult = &session.Session{
+		ID:      "sess-video-zero",
+		CallID:  "call-video",
+		FromTag: "from-video",
+		ToTag:   "to-video",
+		Audio:   session.Media{APort: 14000, BPort: 14001},
+		Video:   session.Media{APort: 14002, BPort: 14003},
+	}
+	handler := newTestHandler(manager)
+
+	payload := map[string]any{
+		"call_id":  "call-video",
+		"from_tag": "from-video",
+		"to_tag":   "to-video",
+		"audio": map[string]any{
+			"enable": true,
+		},
+		"video": map[string]any{
+			"enable":         true,
+			"rtpengine_dest": "0.0.0.0:0",
+		},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("unexpected marshal error: %v", err)
+	}
+	recorder := performRequest(handler, http.MethodPost, "/v1/session", bytes.NewBuffer(body))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+	if manager.createWithDestCalls != 1 {
+		t.Fatalf("expected CreateWithInitialDest to be called once")
+	}
+	if manager.createWithDestInput.initialVideoDest == nil {
+		t.Fatalf("expected initial video dest to be set")
+	}
+	if manager.createWithDestInput.initialVideoDest.Port != 0 {
+		t.Fatalf("expected initial video dest port 0, got %d", manager.createWithDestInput.initialVideoDest.Port)
+	}
+	if manager.createWithDestInput.initialAudioDest != nil {
+		t.Fatalf("expected initial audio dest to be nil")
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 
 type SessionManager interface {
 	Create(callID, fromTag, toTag string, videoFix bool) (*session.Session, error)
+	CreateWithInitialDest(callID, fromTag, toTag string, videoFix bool, initialAudioDest, initialVideoDest *net.UDPAddr) (*session.Session, error)
 	Get(id string) (*session.Session, bool)
 	UpdateRTPDest(id string, audioDest, videoDest *net.UDPAddr) (*session.Session, bool)
 	Delete(id string) bool
@@ -53,11 +54,13 @@ type createSessionRequest struct {
 	FromTag string `json:"from_tag"`
 	ToTag   string `json:"to_tag"`
 	Audio   struct {
-		Enable bool `json:"enable"`
+		Enable        bool    `json:"enable"`
+		RTPEngineDest *string `json:"rtpengine_dest"`
 	} `json:"audio"`
 	Video struct {
-		Enable bool  `json:"enable"`
-		Fix    *bool `json:"fix"`
+		Enable        bool    `json:"enable"`
+		Fix           *bool   `json:"fix"`
+		RTPEngineDest *string `json:"rtpengine_dest"`
 	} `json:"video"`
 }
 
@@ -158,7 +161,35 @@ func (h *Handler) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 	if req.Video.Fix != nil {
 		videoFix = *req.Video.Fix
 	}
-	created, err := h.manager.Create(req.CallID, req.FromTag, req.ToTag, videoFix)
+	var audioDest *net.UDPAddr
+	if req.Audio.RTPEngineDest != nil {
+		parsed, err := parseDest(*req.Audio.RTPEngineDest)
+		if err != nil {
+			logging.L().Warn("session.create failed", "error", err, "field", "audio.rtpengine_dest")
+			writeJSON(w, http.StatusBadRequest, errorResponse{Error: fmt.Sprintf("audio rtpengine_dest %s", err)})
+			return
+		}
+		audioDest = parsed
+	}
+	var videoDest *net.UDPAddr
+	if req.Video.RTPEngineDest != nil {
+		parsed, err := parseDest(*req.Video.RTPEngineDest)
+		if err != nil {
+			logging.L().Warn("session.create failed", "error", err, "field", "video.rtpengine_dest")
+			writeJSON(w, http.StatusBadRequest, errorResponse{Error: fmt.Sprintf("video rtpengine_dest %s", err)})
+			return
+		}
+		videoDest = parsed
+	}
+	var (
+		created *session.Session
+		err     error
+	)
+	if audioDest != nil || videoDest != nil {
+		created, err = h.manager.CreateWithInitialDest(req.CallID, req.FromTag, req.ToTag, videoFix, audioDest, videoDest)
+	} else {
+		created, err = h.manager.Create(req.CallID, req.FromTag, req.ToTag, videoFix)
+	}
 	if err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, session.ErrNoPortsAvailable) {
