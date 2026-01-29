@@ -127,6 +127,14 @@ func newManagerWithDeps(allocator *PortAllocator, peerLearningWindow, maxFrameWa
 }
 
 func (m *Manager) Create(callID, fromTag, toTag string, videoFix bool) (*Session, error) {
+	return m.createWithDest(callID, fromTag, toTag, videoFix, nil, nil)
+}
+
+func (m *Manager) CreateWithInitialDest(callID, fromTag, toTag string, videoFix bool, initialAudioDest, initialVideoDest *net.UDPAddr) (*Session, error) {
+	return m.createWithDest(callID, fromTag, toTag, videoFix, initialAudioDest, initialVideoDest)
+}
+
+func (m *Manager) createWithDest(callID, fromTag, toTag string, videoFix bool, initialAudioDest, initialVideoDest *net.UDPAddr) (*Session, error) {
 	ports, err := m.allocator.Allocate(4)
 	if err != nil {
 		return nil, err
@@ -158,6 +166,7 @@ func (m *Manager) Create(callID, fromTag, toTag string, videoFix bool) (*Session
 	session.videoEnabled.Store(true)
 	session.audioDisabledReason.Store("")
 	session.videoDisabledReason.Store("")
+	applyRTPDest(session, initialAudioDest, initialVideoDest)
 
 	aConn, err := m.listenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: session.Audio.APort})
 	if err != nil {
@@ -235,6 +244,14 @@ func (m *Manager) UpdateRTPDest(id string, audioDest, videoDest *net.UDPAddr) (*
 	if !ok {
 		return nil, false
 	}
+	applyRTPDest(session, audioDest, videoDest)
+	return cloneSession(session), true
+}
+
+func applyRTPDest(session *Session, audioDest, videoDest *net.UDPAddr) {
+	if session == nil {
+		return
+	}
 	if audioDest != nil {
 		if audioDest.Port == 0 {
 			session.Audio.RTPEngineDest = nil
@@ -271,7 +288,6 @@ func (m *Manager) UpdateRTPDest(id string, audioDest, videoDest *net.UDPAddr) (*
 			session.videoDest.Store(clone)
 		}
 	}
-	return cloneSession(session), true
 }
 
 func (m *Manager) Delete(id string) bool {

@@ -10,6 +10,7 @@ import (
 
 func TestVideoProxyRawModeForwardsPackets(t *testing.T) {
 	session := &Session{ID: "S-raw"}
+	session.videoEnabled.Store(true)
 	aConn := mustListenUDP(t)
 	bConn := mustListenUDP(t)
 	rtpEngineConn := mustListenUDP(t)

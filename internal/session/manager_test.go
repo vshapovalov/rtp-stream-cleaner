@@ -160,6 +160,45 @@ func TestManager_UpdateRTPDest_DisablesMediaOnPortZero(t *testing.T) {
 	}
 }
 
+// TestManager_CreateWithInitialDest_AppliesDestinations verifies that initial
+// RTP destinations are applied at creation time, including disabling media when
+// port 0 is provided. This matters because callers must be able to set initial
+// media state without an extra update call. Preconditions: a deterministic
+// manager instance with UDP networking disabled. Inputs: create with audio
+// destination port 40100 and video destination port 0. Edge case: port 0
+// disables media and clears destination. The expected output is enabled audio
+// with a non-nil destination and disabled video with nil destination and reason
+// "rtpengine_port_0". Assertions are stable because the manager uses
+// deterministic inputs and no concurrency. Flakiness is avoided by using stub
+// proxies and no timers. A regression would leave video enabled or set a
+// non-nil destination for port 0.
+func TestManager_CreateWithInitialDest_AppliesDestinations(t *testing.T) {
+	manager := newTestManager(t, 0)
+	audioDest := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 10), Port: 40100}
+	videoDest := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 20), Port: 0}
+
+	created, err := manager.CreateWithInitialDest("call-7", "from-7", "to-7", false, audioDest, videoDest)
+	if err != nil {
+		t.Fatalf("unexpected create error: %v", err)
+	}
+
+	if !created.Audio.Enabled {
+		t.Fatalf("expected audio to be enabled")
+	}
+	if created.Audio.RTPEngineDest == nil {
+		t.Fatalf("expected audio dest to be set")
+	}
+	if created.Video.Enabled {
+		t.Fatalf("expected video to be disabled")
+	}
+	if created.Video.RTPEngineDest != nil {
+		t.Fatalf("expected video dest to be nil when disabled")
+	}
+	if created.Video.DisabledReason != "rtpengine_port_0" {
+		t.Fatalf("expected disabled reason %q, got %q", "rtpengine_port_0", created.Video.DisabledReason)
+	}
+}
+
 // TestManager_DeleteRemovesSession ensures that Delete removes a session from
 // the manager and returns true for existing IDs. This matters because cleanup
 // must release resources and prevent future lookups. Preconditions: a manager
