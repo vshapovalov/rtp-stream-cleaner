@@ -233,15 +233,21 @@ func waitForHealth(baseURL string, timeout time.Duration) error {
 
 func createSession(t *testing.T, client *http.Client, baseURL string, req createSessionRequest) (createSessionResponse, error) {
 	t.Helper()
-	var resp createSessionResponse
-	status, err := doJSONRequest(client, http.MethodPost, withAccessToken(baseURL+"/v1/session"), req, &resp)
-	if err != nil {
-		return resp, err
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var resp createSessionResponse
+		status, err := doJSONRequest(client, http.MethodPost, withAccessToken(baseURL+"/v1/session"), req, &resp)
+		if err != nil {
+			return resp, err
+		}
+		if status == http.StatusOK {
+			return resp, nil
+		}
+		if status != http.StatusInternalServerError || time.Now().After(deadline) {
+			return resp, fmt.Errorf("create session status %d", status)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
-	if status != http.StatusOK {
-		return resp, fmt.Errorf("create session status %d", status)
-	}
-	return resp, nil
 }
 
 func getSession(t *testing.T, client *http.Client, baseURL, id string) (sessionStateResponse, int, error) {

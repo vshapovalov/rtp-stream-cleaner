@@ -19,8 +19,6 @@ const (
 	defaultSnap     = 65535
 )
 
-type byteOrder binary.ByteOrder
-
 // Packet represents a captured packet.
 type Packet struct {
 	Timestamp time.Time
