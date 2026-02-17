@@ -13,6 +13,7 @@ func TestLoad_FileWinsOverEnv(t *testing.T) {
 
 	configJSON := `{
 		"api_listen_addr": "127.0.0.1:9999",
+		"service_password": "from-file-password",
 		"public_ip": "198.51.100.10",
 		"internal_ip": "10.10.0.5",
 		"rtp_port_min": 21000,
@@ -32,6 +33,7 @@ func TestLoad_FileWinsOverEnv(t *testing.T) {
 
 	setAllEnv(t, map[string]string{
 		"API_LISTEN_ADDR":             "0.0.0.0:8081",
+		"SERVICE_PASSWORD":            "from-env-password",
 		"PUBLIC_IP":                   "203.0.113.50",
 		"INTERNAL_IP":                 "10.0.0.1",
 		"RTP_PORT_MIN":                "30000",
@@ -52,6 +54,7 @@ func TestLoad_FileWinsOverEnv(t *testing.T) {
 	}
 
 	if cfg.APIListenAddr != "127.0.0.1:9999" ||
+		cfg.ServicePassword != "from-file-password" ||
 		cfg.PublicIP != "198.51.100.10" ||
 		cfg.InternalIP != "10.10.0.5" ||
 		cfg.RTPPortMin != 21000 ||
@@ -74,6 +77,7 @@ func TestLoad_EnvFallbackWhenFileAbsent(t *testing.T) {
 
 	setAllEnv(t, map[string]string{
 		"API_LISTEN_ADDR":             "0.0.0.0:7070",
+		"SERVICE_PASSWORD":            "env-password",
 		"PUBLIC_IP":                   "203.0.113.42",
 		"INTERNAL_IP":                 "10.20.30.40",
 		"RTP_PORT_MIN":                "31000",
@@ -94,6 +98,7 @@ func TestLoad_EnvFallbackWhenFileAbsent(t *testing.T) {
 	}
 
 	if cfg.APIListenAddr != "0.0.0.0:7070" ||
+		cfg.ServicePassword != "env-password" ||
 		cfg.PublicIP != "203.0.113.42" ||
 		cfg.InternalIP != "10.20.30.40" ||
 		cfg.RTPPortMin != 31000 ||

@@ -23,9 +23,10 @@ type SessionManager interface {
 }
 
 type Handler struct {
-	manager    SessionManager
-	publicIP   string
-	internalIP string
+	manager         SessionManager
+	publicIP        string
+	internalIP      string
+	servicePassword string
 }
 
 func NewHandler(cfg config.Config, manager SessionManager) *Handler {
@@ -34,19 +35,31 @@ func NewHandler(cfg config.Config, manager SessionManager) *Handler {
 		internalIP = cfg.PublicIP
 	}
 	return &Handler{
-		manager:    manager,
-		publicIP:   cfg.PublicIP,
-		internalIP: internalIP,
+		manager:         manager,
+		publicIP:        cfg.PublicIP,
+		internalIP:      internalIP,
+		servicePassword: cfg.ServicePassword,
 	}
 }
 
 func (h *Handler) Register(mux *http.ServeMux) {
-	mux.HandleFunc("GET /v1/health", h.handleHealth)
-	mux.HandleFunc("POST /v1/session", h.handleSessionCreate)
-	mux.HandleFunc("GET /v1/session/{id}", h.handleSessionGetByID)
-	mux.HandleFunc("DELETE /v1/session/{id}", h.handleSessionDeleteByID)
-	mux.HandleFunc("POST /v1/session/{id}/update", h.handleSessionUpdateByID)
-	mux.HandleFunc("POST /v1/session/{id}/delete", h.handleSessionDeleteByID)
+	mux.Handle("GET /v1/health", h.withAccessTokenAuth(http.HandlerFunc(h.handleHealth)))
+	mux.Handle("POST /v1/session", h.withAccessTokenAuth(http.HandlerFunc(h.handleSessionCreate)))
+	mux.Handle("GET /v1/session/{id}", h.withAccessTokenAuth(http.HandlerFunc(h.handleSessionGetByID)))
+	mux.Handle("DELETE /v1/session/{id}", h.withAccessTokenAuth(http.HandlerFunc(h.handleSessionDeleteByID)))
+	mux.Handle("POST /v1/session/{id}/update", h.withAccessTokenAuth(http.HandlerFunc(h.handleSessionUpdateByID)))
+	mux.Handle("POST /v1/session/{id}/delete", h.withAccessTokenAuth(http.HandlerFunc(h.handleSessionDeleteByID)))
+}
+
+func (h *Handler) withAccessTokenAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token := r.URL.Query().Get("access_token")
+		if token == "" || token != h.servicePassword {
+			writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "unauthorized"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 type createSessionRequest struct {

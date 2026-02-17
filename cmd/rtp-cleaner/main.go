@@ -25,6 +25,9 @@ func main() {
 	if cfg.InternalIP != "" {
 		logger.Info("internal_ip configured", "internal_ip", cfg.InternalIP)
 	}
+	if cfg.ServicePassword == "" {
+		logger.Warn("service_password is empty; API access is denied until it is configured")
+	}
 
 	allocator, err := session.NewPortAllocator(cfg.RTPPortMin, cfg.RTPPortMax)
 	if err != nil {

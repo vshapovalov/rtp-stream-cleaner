@@ -21,10 +21,11 @@ import (
 )
 
 const (
-	normalAudioSSRC  uint32 = 0xedcc15a7
-	normalVideoSSRC  uint32 = 0x259989ef
-	problemAudioSSRC uint32 = 0x7260ee6c
-	problemVideoSSRC uint32 = 0x45db6713
+	integrationServicePassword        = "integration-secret"
+	normalAudioSSRC            uint32 = 0xedcc15a7
+	normalVideoSSRC            uint32 = 0x259989ef
+	problemAudioSSRC           uint32 = 0x7260ee6c
+	problemVideoSSRC           uint32 = 0x45db6713
 )
 
 type binaryCache struct {
@@ -178,7 +179,8 @@ func startRtpCleaner(t *testing.T, env map[string]string) (*rtpCleanerInstance, 
 	t.Helper()
 	binary := buildRtpCleaner(t)
 	baseEnv := map[string]string{
-		"PUBLIC_IP": "127.0.0.1",
+		"PUBLIC_IP":        "127.0.0.1",
+		"SERVICE_PASSWORD": integrationServicePassword,
 	}
 	for key, value := range env {
 		baseEnv[key] = value
@@ -217,7 +219,7 @@ func waitForHealth(baseURL string, timeout time.Duration) error {
 	client := &http.Client{Timeout: 500 * time.Millisecond}
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		resp, err := client.Get(baseURL + "/v1/health")
+		resp, err := client.Get(withAccessToken(baseURL + "/v1/health"))
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
@@ -232,7 +234,7 @@ func waitForHealth(baseURL string, timeout time.Duration) error {
 func createSession(t *testing.T, client *http.Client, baseURL string, req createSessionRequest) (createSessionResponse, error) {
 	t.Helper()
 	var resp createSessionResponse
-	status, err := doJSONRequest(client, http.MethodPost, baseURL+"/v1/session", req, &resp)
+	status, err := doJSONRequest(client, http.MethodPost, withAccessToken(baseURL+"/v1/session"), req, &resp)
 	if err != nil {
 		return resp, err
 	}
@@ -245,20 +247,28 @@ func createSession(t *testing.T, client *http.Client, baseURL string, req create
 func getSession(t *testing.T, client *http.Client, baseURL, id string) (sessionStateResponse, int, error) {
 	t.Helper()
 	var resp sessionStateResponse
-	status, err := doJSONRequest(client, http.MethodGet, baseURL+"/v1/session/"+id, nil, &resp)
+	status, err := doJSONRequest(client, http.MethodGet, withAccessToken(baseURL+"/v1/session/"+id), nil, &resp)
 	return resp, status, err
 }
 
 func deleteSession(t *testing.T, client *http.Client, baseURL, id string) (int, error) {
 	t.Helper()
-	return doJSONRequest(client, http.MethodDelete, baseURL+"/v1/session/"+id, nil, nil)
+	return doJSONRequest(client, http.MethodDelete, withAccessToken(baseURL+"/v1/session/"+id), nil, nil)
 }
 
 func updateSession(t *testing.T, client *http.Client, baseURL, id string, req updateSessionRequest) (sessionStateResponse, int, error) {
 	t.Helper()
 	var resp sessionStateResponse
-	status, err := doJSONRequest(client, http.MethodPost, baseURL+"/v1/session/"+id+"/update", req, &resp)
+	status, err := doJSONRequest(client, http.MethodPost, withAccessToken(baseURL+"/v1/session/"+id+"/update"), req, &resp)
 	return resp, status, err
+}
+
+func withAccessToken(rawURL string) string {
+	separator := "?"
+	if strings.Contains(rawURL, "?") {
+		separator = "&"
+	}
+	return rawURL + separator + "access_token=" + integrationServicePassword
 }
 
 func doJSONRequest(client *http.Client, method, url string, body any, dst any) (int, error) {
@@ -487,7 +497,7 @@ func stopProcess(t *testing.T, cmd *exec.Cmd, timeout time.Duration) {
 
 func assertNotFound(t *testing.T, client *http.Client, baseURL, id string) {
 	t.Helper()
-	status, err := doJSONRequest(client, http.MethodGet, baseURL+"/v1/session/"+id, nil, &errorResponse{})
+	status, err := doJSONRequest(client, http.MethodGet, withAccessToken(baseURL+"/v1/session/"+id), nil, &errorResponse{})
 	if err != nil {
 		t.Fatalf("get session after delete: %v", err)
 	}
