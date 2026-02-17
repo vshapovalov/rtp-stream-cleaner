@@ -224,7 +224,7 @@ func (m *Manager) createWithDest(callID, fromTag, toTag string, videoFix bool, i
 	m.sessions[session.ID] = session
 	session.audioProxy.start()
 	session.videoProxy.start()
-	return cloneSession(session), nil
+	return session, nil
 }
 
 func (m *Manager) Get(id string) (*Session, bool) {
@@ -234,7 +234,7 @@ func (m *Manager) Get(id string) (*Session, bool) {
 	if !ok {
 		return nil, false
 	}
-	return cloneSession(session), true
+	return session, true
 }
 
 func (m *Manager) UpdateRTPDest(id string, audioDest, videoDest *net.UDPAddr) (*Session, bool) {
@@ -245,7 +245,7 @@ func (m *Manager) UpdateRTPDest(id string, audioDest, videoDest *net.UDPAddr) (*
 		return nil, false
 	}
 	applyRTPDest(session, audioDest, videoDest)
-	return cloneSession(session), true
+	return session, true
 }
 
 func applyRTPDest(session *Session, audioDest, videoDest *net.UDPAddr) {
@@ -311,33 +311,6 @@ func (m *Manager) generateID() string {
 		return fmt.Sprintf("S-%d", time.Now().UnixNano())
 	}
 	return "S-" + hex.EncodeToString(buffer)
-}
-
-func cloneSession(session *Session) *Session {
-	if session == nil {
-		return nil
-	}
-	clone := *session
-	clone.LastActivity = session.lastActivity()
-	clone.State = session.stateString()
-	clone.Audio = cloneMedia(session.Audio)
-	clone.Video = cloneMedia(session.Video)
-	clone.Audio.Enabled = session.audioEnabled.Load()
-	clone.Audio.DisabledReason = loadAtomicString(&session.audioDisabledReason)
-	clone.Video.Enabled = session.videoEnabled.Load()
-	clone.Video.DisabledReason = loadAtomicString(&session.videoDisabledReason)
-	clone.AudioCounters = snapshotAudioCounters(&session.audioCounters)
-	clone.VideoCounters = snapshotVideoCounters(&session.videoCounters)
-	return &clone
-}
-
-func cloneMedia(media Media) Media {
-	clone := media
-	if media.RTPEngineDest != nil {
-		dest := *media.RTPEngineDest
-		clone.RTPEngineDest = &dest
-	}
-	return clone
 }
 
 func cloneUDPAddr(addr *net.UDPAddr) *net.UDPAddr {
