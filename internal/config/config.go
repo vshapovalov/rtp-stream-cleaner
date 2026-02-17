@@ -14,6 +14,7 @@ const FileName = "config.json"
 
 type Config struct {
 	APIListenAddr           string `json:"api_listen_addr"`
+	ServicePassword         string `json:"service_password"`
 	PublicIP                string `json:"public_ip"`
 	InternalIP              string `json:"internal_ip"`
 	RTPPortMin              int    `json:"rtp_port_min"`
@@ -67,6 +68,7 @@ func loadFromEnv() Config {
 	packetLog := getEnvBool("PACKET_LOG", false)
 	return Config{
 		APIListenAddr:           getEnv("API_LISTEN_ADDR", "0.0.0.0:8080"),
+		ServicePassword:         os.Getenv("SERVICE_PASSWORD"),
 		PublicIP:                os.Getenv("PUBLIC_IP"),
 		InternalIP:              os.Getenv("INTERNAL_IP"),
 		RTPPortMin:              getEnvInt("RTP_PORT_MIN", 30000),

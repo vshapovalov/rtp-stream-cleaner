@@ -89,17 +89,69 @@ func (m *mockManager) Delete(id string) bool {
 }
 
 func newTestHandler(manager SessionManager) *Handler {
-	cfg := config.Config{PublicIP: "203.0.113.1", InternalIP: "10.0.0.1"}
+	cfg := config.Config{PublicIP: "203.0.113.1", InternalIP: "10.0.0.1", ServicePassword: "test-password"}
 	return NewHandler(cfg, manager)
 }
 
 func performRequest(handler *Handler, method, path string, body io.Reader) *httptest.ResponseRecorder {
 	mux := http.NewServeMux()
 	handler.Register(mux)
+	if path == "" {
+		path = "/"
+	}
+	separator := "?"
+	if bytes.Contains([]byte(path), []byte("?")) {
+		separator = "&"
+	}
+	path = path + separator + "access_token=test-password"
 	req := httptest.NewRequest(method, path, body)
 	recorder := httptest.NewRecorder()
 	mux.ServeHTTP(recorder, req)
 	return recorder
+}
+
+func TestAPI_AccessTokenAuth_CorrectToken_AllowsRequest(t *testing.T) {
+	manager := &mockManager{}
+	handler := newTestHandler(manager)
+
+	recorder := performRequest(handler, http.MethodGet, "/v1/health", nil)
+
+	if recorder.Code == http.StatusUnauthorized {
+		t.Fatalf("expected non-401 status, got %d", recorder.Code)
+	}
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+}
+
+func TestAPI_AccessTokenAuth_WrongToken_401(t *testing.T) {
+	manager := &mockManager{}
+	handler := newTestHandler(manager)
+
+	mux := http.NewServeMux()
+	handler.Register(mux)
+	req := httptest.NewRequest(http.MethodGet, "/v1/health?access_token=wrong", nil)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, recorder.Code)
+	}
+}
+
+func TestAPI_AccessTokenAuth_MissingToken_401(t *testing.T) {
+	manager := &mockManager{}
+	handler := newTestHandler(manager)
+
+	mux := http.NewServeMux()
+	handler.Register(mux)
+	req := httptest.NewRequest(http.MethodGet, "/v1/health", nil)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, recorder.Code)
+	}
 }
 
 // TestAPI_CreateSession_BadJSON_400 verifies that the create-session handler

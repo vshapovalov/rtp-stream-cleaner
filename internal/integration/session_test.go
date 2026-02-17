@@ -147,7 +147,7 @@ func TestIntegrationA2CreateValidation(t *testing.T) {
 	}
 
 	payload := []byte(`{"call_id":123,"from_tag":"from-a2","to_tag":"to-a2","audio":{"enable":true}}`)
-	req, err := http.NewRequest(http.MethodPost, instance.BaseURL+"/v1/session", bytes.NewReader(payload))
+	req, err := http.NewRequest(http.MethodPost, withAccessToken(instance.BaseURL+"/v1/session"), bytes.NewReader(payload))
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}

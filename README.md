@@ -26,6 +26,7 @@ PUBLIC_IP=203.0.113.10 ./bin/rtp-cleaner
 | Variable | Default | Description |
 | --- | --- | --- |
 | `API_LISTEN_ADDR` | `0.0.0.0:8080` | HTTP listen address. |
+| `SERVICE_PASSWORD` | _(empty)_ | Required access token value for every HTTP API request (`access_token` query parameter). If empty, all API requests are rejected with `401`. |
 | `PUBLIC_IP` | _(required)_ | Public IP returned by the session API. |
 | `INTERNAL_IP` | _(optional)_ | Internal IP returned by the session API. If empty, `PUBLIC_IP` is used instead (so `PUBLIC_IP` must be set). |
 | `RTP_PORT_MIN` | `30000` | First port in allocator range. |
@@ -46,7 +47,7 @@ PUBLIC_IP=203.0.113.10 ./bin/rtp-cleaner
 Create session:
 
 ```bash
-curl -s -X POST http://127.0.0.1:8080/v1/session \
+curl -s -X POST "http://127.0.0.1:8080/v1/session?access_token=<SERVICE_PASSWORD>" \
   -H 'Content-Type: application/json' \
   -d '{"call_id":"demo","from_tag":"a","to_tag":"b","audio":{"enable":true},"video":{"enable":true,"fix":true}}'
 ```
@@ -54,7 +55,7 @@ curl -s -X POST http://127.0.0.1:8080/v1/session \
 Update session with rtpengine destination:
 
 ```bash
-curl -s -X POST http://127.0.0.1:8080/v1/session/<session_id>/update \
+curl -s -X POST "http://127.0.0.1:8080/v1/session/<session_id>/update?access_token=<SERVICE_PASSWORD>" \
   -H 'Content-Type: application/json' \
   -d '{"audio":{"rtpengine_dest":"10.0.0.5:40100"},"video":{"rtpengine_dest":"10.0.0.5:40102"}}'
 ```
@@ -62,7 +63,7 @@ curl -s -X POST http://127.0.0.1:8080/v1/session/<session_id>/update \
 Delete session:
 
 ```bash
-curl -s -X DELETE http://127.0.0.1:8080/v1/session/<session_id>
+curl -s -X DELETE "http://127.0.0.1:8080/v1/session/<session_id>?access_token=<SERVICE_PASSWORD>"
 ```
 
 ## OpenAPI
@@ -89,13 +90,13 @@ tshark -r capture.pcapng -Y rtp -T fields -e rtp.seq -e rtp.marker -e rtp.timest
 Run the service:
 
 ```bash
-PUBLIC_IP=127.0.0.1 go run ./cmd/rtp-cleaner
+PUBLIC_IP=127.0.0.1 SERVICE_PASSWORD=secret go run ./cmd/rtp-cleaner
 ```
 
 Create a session and capture returned `audio.a_port` and `audio.b_port`:
 
 ```bash
-curl -s -X POST http://127.0.0.1:8080/v1/session \
+curl -s -X POST "http://127.0.0.1:8080/v1/session?access_token=<SERVICE_PASSWORD>" \
   -H 'Content-Type: application/json' \
   -d '{"call_id":"demo","from_tag":"a","to_tag":"b","audio":{"enable":true},"video":{"enable":false}}'
 ```
@@ -109,7 +110,7 @@ socat -u UDP-RECV:40000 STDOUT
 Update the session with the destination above:
 
 ```bash
-curl -s -X POST http://127.0.0.1:8080/v1/session/<session_id>/update \
+curl -s -X POST "http://127.0.0.1:8080/v1/session/<session_id>/update?access_token=<SERVICE_PASSWORD>" \
   -H 'Content-Type: application/json' \
   -d '{"audio":{"rtpengine_dest":"127.0.0.1:40000"}}'
 ```
