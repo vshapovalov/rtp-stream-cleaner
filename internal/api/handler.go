@@ -147,6 +147,70 @@ type errorResponse struct {
 	Error string `json:"error"`
 }
 
+func newCreateSessionResponse(publicIP, internalIP string, created *session.Session) createSessionResponse {
+	mediaAudio := created.AudioState()
+	mediaVideo := created.VideoState()
+	return createSessionResponse{
+		ID:         created.ID,
+		PublicIP:   publicIP,
+		InternalIP: internalIP,
+		Audio:      portResponse{APort: mediaAudio.APort, BPort: mediaAudio.BPort},
+		Video:      portResponse{APort: mediaVideo.APort, BPort: mediaVideo.BPort},
+	}
+}
+
+func newMediaStateResponse(media session.Media) mediaStateResponse {
+	return mediaStateResponse{
+		APort:          media.APort,
+		BPort:          media.BPort,
+		RTPEngineDest:  formatDest(media.RTPEngineDest),
+		Enabled:        media.Enabled,
+		DisabledReason: media.DisabledReason,
+	}
+}
+
+func newGetSessionResponse(publicIP, internalIP string, found *session.Session) getSessionResponse {
+	audioCounters := found.AudioCountersSnapshot()
+	videoCounters := found.VideoCountersSnapshot()
+	audioMedia := found.AudioState()
+	videoMedia := found.VideoState()
+	return getSessionResponse{
+		ID:                 found.ID,
+		CallID:             found.CallID,
+		FromTag:            found.FromTag,
+		ToTag:              found.ToTag,
+		PublicIP:           publicIP,
+		InternalIP:         internalIP,
+		AudioAInPkts:       audioCounters.AInPkts,
+		AudioAInBytes:      audioCounters.AInBytes,
+		AudioBOutPkts:      audioCounters.BOutPkts,
+		AudioBOutBytes:     audioCounters.BOutBytes,
+		AudioBInPkts:       audioCounters.BInPkts,
+		AudioBInBytes:      audioCounters.BInBytes,
+		AudioAOutPkts:      audioCounters.AOutPkts,
+		AudioAOutBytes:     audioCounters.AOutBytes,
+		VideoAInPkts:       videoCounters.AInPkts,
+		VideoAInBytes:      videoCounters.AInBytes,
+		VideoBOutPkts:      videoCounters.BOutPkts,
+		VideoBOutBytes:     videoCounters.BOutBytes,
+		VideoBInPkts:       videoCounters.BInPkts,
+		VideoBInBytes:      videoCounters.BInBytes,
+		VideoAOutPkts:      videoCounters.AOutPkts,
+		VideoAOutBytes:     videoCounters.AOutBytes,
+		VideoFramesStarted: videoCounters.VideoFramesStarted,
+		VideoFramesEnded:   videoCounters.VideoFramesEnded,
+		VideoFramesFlushed: videoCounters.VideoFramesFlushed,
+		VideoForcedFlushes: videoCounters.VideoForcedFlushes,
+		VideoInjectedSPS:   videoCounters.VideoInjectedSPS,
+		VideoInjectedPPS:   videoCounters.VideoInjectedPPS,
+		VideoSeqDelta:      videoCounters.VideoSeqDelta,
+		LastActivity:       formatTime(found.LastActivityTime()),
+		State:              found.StateString(),
+		Audio:              newMediaStateResponse(audioMedia),
+		Video:              newMediaStateResponse(videoMedia),
+	}
+}
+
 func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ok"))
@@ -212,19 +276,7 @@ func (h *Handler) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, status, errorResponse{Error: err.Error()})
 		return
 	}
-	resp := createSessionResponse{
-		ID:         created.ID,
-		PublicIP:   h.publicIP,
-		InternalIP: h.internalIP,
-		Audio: portResponse{
-			APort: created.Audio.APort,
-			BPort: created.Audio.BPort,
-		},
-		Video: portResponse{
-			APort: created.Video.APort,
-			BPort: created.Video.BPort,
-		},
-	}
+	resp := newCreateSessionResponse(h.publicIP, h.internalIP, created)
 	logging.WithSessionID(created.ID).Info(
 		"session.create",
 		"call_id",
@@ -284,53 +336,7 @@ func (h *Handler) handleSessionGet(w http.ResponseWriter, r *http.Request, id st
 		writeJSON(w, http.StatusNotFound, errorResponse{Error: "session not found"})
 		return
 	}
-	resp := getSessionResponse{
-		ID:                 found.ID,
-		CallID:             found.CallID,
-		FromTag:            found.FromTag,
-		ToTag:              found.ToTag,
-		PublicIP:           h.publicIP,
-		InternalIP:         h.internalIP,
-		AudioAInPkts:       found.AudioCounters.AInPkts,
-		AudioAInBytes:      found.AudioCounters.AInBytes,
-		AudioBOutPkts:      found.AudioCounters.BOutPkts,
-		AudioBOutBytes:     found.AudioCounters.BOutBytes,
-		AudioBInPkts:       found.AudioCounters.BInPkts,
-		AudioBInBytes:      found.AudioCounters.BInBytes,
-		AudioAOutPkts:      found.AudioCounters.AOutPkts,
-		AudioAOutBytes:     found.AudioCounters.AOutBytes,
-		VideoAInPkts:       found.VideoCounters.AInPkts,
-		VideoAInBytes:      found.VideoCounters.AInBytes,
-		VideoBOutPkts:      found.VideoCounters.BOutPkts,
-		VideoBOutBytes:     found.VideoCounters.BOutBytes,
-		VideoBInPkts:       found.VideoCounters.BInPkts,
-		VideoBInBytes:      found.VideoCounters.BInBytes,
-		VideoAOutPkts:      found.VideoCounters.AOutPkts,
-		VideoAOutBytes:     found.VideoCounters.AOutBytes,
-		VideoFramesStarted: found.VideoCounters.VideoFramesStarted,
-		VideoFramesEnded:   found.VideoCounters.VideoFramesEnded,
-		VideoFramesFlushed: found.VideoCounters.VideoFramesFlushed,
-		VideoForcedFlushes: found.VideoCounters.VideoForcedFlushes,
-		VideoInjectedSPS:   found.VideoCounters.VideoInjectedSPS,
-		VideoInjectedPPS:   found.VideoCounters.VideoInjectedPPS,
-		VideoSeqDelta:      found.VideoCounters.VideoSeqDelta,
-		LastActivity:       formatTime(found.LastActivity),
-		State:              found.State,
-		Audio: mediaStateResponse{
-			APort:          found.Audio.APort,
-			BPort:          found.Audio.BPort,
-			RTPEngineDest:  formatDest(found.Audio.RTPEngineDest),
-			Enabled:        found.Audio.Enabled,
-			DisabledReason: found.Audio.DisabledReason,
-		},
-		Video: mediaStateResponse{
-			APort:          found.Video.APort,
-			BPort:          found.Video.BPort,
-			RTPEngineDest:  formatDest(found.Video.RTPEngineDest),
-			Enabled:        found.Video.Enabled,
-			DisabledReason: found.Video.DisabledReason,
-		},
-	}
+	resp := newGetSessionResponse(h.publicIP, h.internalIP, found)
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -367,53 +373,7 @@ func (h *Handler) handleSessionUpdate(w http.ResponseWriter, r *http.Request, id
 		writeJSON(w, http.StatusNotFound, errorResponse{Error: "session not found"})
 		return
 	}
-	resp := getSessionResponse{
-		ID:                 updated.ID,
-		CallID:             updated.CallID,
-		FromTag:            updated.FromTag,
-		ToTag:              updated.ToTag,
-		PublicIP:           h.publicIP,
-		InternalIP:         h.internalIP,
-		AudioAInPkts:       updated.AudioCounters.AInPkts,
-		AudioAInBytes:      updated.AudioCounters.AInBytes,
-		AudioBOutPkts:      updated.AudioCounters.BOutPkts,
-		AudioBOutBytes:     updated.AudioCounters.BOutBytes,
-		AudioBInPkts:       updated.AudioCounters.BInPkts,
-		AudioBInBytes:      updated.AudioCounters.BInBytes,
-		AudioAOutPkts:      updated.AudioCounters.AOutPkts,
-		AudioAOutBytes:     updated.AudioCounters.AOutBytes,
-		VideoAInPkts:       updated.VideoCounters.AInPkts,
-		VideoAInBytes:      updated.VideoCounters.AInBytes,
-		VideoBOutPkts:      updated.VideoCounters.BOutPkts,
-		VideoBOutBytes:     updated.VideoCounters.BOutBytes,
-		VideoBInPkts:       updated.VideoCounters.BInPkts,
-		VideoBInBytes:      updated.VideoCounters.BInBytes,
-		VideoAOutPkts:      updated.VideoCounters.AOutPkts,
-		VideoAOutBytes:     updated.VideoCounters.AOutBytes,
-		VideoFramesStarted: updated.VideoCounters.VideoFramesStarted,
-		VideoFramesEnded:   updated.VideoCounters.VideoFramesEnded,
-		VideoFramesFlushed: updated.VideoCounters.VideoFramesFlushed,
-		VideoForcedFlushes: updated.VideoCounters.VideoForcedFlushes,
-		VideoInjectedSPS:   updated.VideoCounters.VideoInjectedSPS,
-		VideoInjectedPPS:   updated.VideoCounters.VideoInjectedPPS,
-		VideoSeqDelta:      updated.VideoCounters.VideoSeqDelta,
-		LastActivity:       formatTime(updated.LastActivity),
-		State:              updated.State,
-		Audio: mediaStateResponse{
-			APort:          updated.Audio.APort,
-			BPort:          updated.Audio.BPort,
-			RTPEngineDest:  formatDest(updated.Audio.RTPEngineDest),
-			Enabled:        updated.Audio.Enabled,
-			DisabledReason: updated.Audio.DisabledReason,
-		},
-		Video: mediaStateResponse{
-			APort:          updated.Video.APort,
-			BPort:          updated.Video.BPort,
-			RTPEngineDest:  formatDest(updated.Video.RTPEngineDest),
-			Enabled:        updated.Video.Enabled,
-			DisabledReason: updated.Video.DisabledReason,
-		},
-	}
+	resp := newGetSessionResponse(h.publicIP, h.internalIP, updated)
 	logAttrs := []any{}
 	if audioDest != nil {
 		logAttrs = append(logAttrs, "audio_dest", audioDest.String())

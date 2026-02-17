@@ -68,6 +68,31 @@ func TestManager_CreateStoresSessionAndReturnsID(t *testing.T) {
 	}
 }
 
+// TestManager_Get_ReturnsStoredPointer verifies that Get returns the same
+// session pointer that is stored in the manager map instead of cloning the
+// Session value. This matters because Session embeds atomic fields that must
+// not be copied by value. Preconditions: a created session with deterministic
+// manager dependencies. Inputs: call Get for the created session ID. Edge case:
+// none. The expected output is pointer identity equality between created and
+// fetched sessions. Assertions are stable because both pointers are in-memory
+// references under a mutex-protected map. Flakiness is avoided by disabling
+// sockets and reaper goroutines in tests. A regression would return a distinct
+// pointer due to reintroduced cloning.
+func TestManager_Get_ReturnsStoredPointer(t *testing.T) {
+	manager := newTestManager(t, 0)
+	created, err := manager.Create("call-get", "from-get", "to-get", false)
+	if err != nil {
+		t.Fatalf("unexpected create error: %v", err)
+	}
+	found, ok := manager.Get(created.ID)
+	if !ok {
+		t.Fatalf("expected session to be present")
+	}
+	if found != created {
+		t.Fatalf("expected Get to return stored session pointer")
+	}
+}
+
 // TestManager_UpdateSetsDestIndependentlyAudioVideo verifies that audio and
 // video RTP destinations are updated independently, preventing one media update
 // from overwriting the other. This matters because callers may update only one
