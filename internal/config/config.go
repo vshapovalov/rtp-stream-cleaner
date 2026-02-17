@@ -1,27 +1,69 @@
 package config
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
+
+	"rtp-stream-cleaner/internal/logging"
 )
 
+const FileName = "config.json"
+
 type Config struct {
-	APIListenAddr           string
-	PublicIP                string
-	InternalIP              string
-	RTPPortMin              int
-	RTPPortMax              int
-	PeerLearningWindowSec   int
-	MaxFrameWaitMS          int
-	IdleTimeoutSec          int
-	VideoInjectCachedSPSPPS bool
-	StatsLogIntervalSec     int
-	PacketLog               bool
-	PacketLogSampleN        int
-	PacketLogOnAnomaly      bool
+	APIListenAddr           string `json:"api_listen_addr"`
+	PublicIP                string `json:"public_ip"`
+	InternalIP              string `json:"internal_ip"`
+	RTPPortMin              int    `json:"rtp_port_min"`
+	RTPPortMax              int    `json:"rtp_port_max"`
+	PeerLearningWindowSec   int    `json:"peer_learning_window_sec"`
+	MaxFrameWaitMS          int    `json:"max_frame_wait_ms"`
+	IdleTimeoutSec          int    `json:"idle_timeout_sec"`
+	VideoInjectCachedSPSPPS bool   `json:"video_inject_cached_sps_pps"`
+	StatsLogIntervalSec     int    `json:"stats_log_interval_sec"`
+	PacketLog               bool   `json:"packet_log"`
+	PacketLogSampleN        int    `json:"packet_log_sample_n"`
+	PacketLogOnAnomaly      bool   `json:"packet_log_on_anomaly"`
 }
 
-func Load() Config {
+func Load() (Config, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return Config{}, fmt.Errorf("resolve current working directory: %w", err)
+	}
+
+	path := filepath.Join(cwd, FileName)
+	if _, err := os.Stat(path); err == nil {
+		cfg, err := loadFromFile(path)
+		if err != nil {
+			return Config{}, err
+		}
+		logging.L().Info("loaded config", "source", "file", "path", path)
+		return cfg, nil
+	} else if !os.IsNotExist(err) {
+		return Config{}, fmt.Errorf("stat config file %s: %w", path, err)
+	}
+
+	logging.L().Info("loaded config", "source", "env")
+	return loadFromEnv(), nil
+}
+
+func loadFromFile(path string) (Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Config{}, fmt.Errorf("read config file %s: %w", path, err)
+	}
+
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return Config{}, fmt.Errorf("parse config file %s: %w", path, err)
+	}
+	return cfg, nil
+}
+
+func loadFromEnv() Config {
 	packetLog := getEnvBool("PACKET_LOG", false)
 	return Config{
 		APIListenAddr:           getEnv("API_LISTEN_ADDR", "0.0.0.0:8080"),

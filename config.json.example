@@ -1,0 +1,15 @@
+{
+  "api_listen_addr": "0.0.0.0:8080",
+  "public_ip": "203.0.113.10",
+  "internal_ip": "10.0.0.10",
+  "rtp_port_min": 30000,
+  "rtp_port_max": 40000,
+  "peer_learning_window_sec": 10,
+  "max_frame_wait_ms": 120,
+  "idle_timeout_sec": 60,
+  "video_inject_cached_sps_pps": false,
+  "stats_log_interval_sec": 5,
+  "packet_log": false,
+  "packet_log_sample_n": 0,
+  "packet_log_on_anomaly": false
+}
