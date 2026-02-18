@@ -9,7 +9,7 @@ import (
 
 func TestLoad_FileWinsOverEnv(t *testing.T) {
 	tempDir := t.TempDir()
-	chdir(t, tempDir)
+	withExecutableDir(t, tempDir)
 
 	configJSON := `{
 		"api_listen_addr": "127.0.0.1:9999",
@@ -25,7 +25,9 @@ func TestLoad_FileWinsOverEnv(t *testing.T) {
 		"stats_log_interval_sec": 8,
 		"packet_log": true,
 		"packet_log_sample_n": 13,
-		"packet_log_on_anomaly": false
+		"packet_log_on_anomaly": false,
+		"log_level": "debug",
+		"log_format": "text"
 	}`
 	if err := os.WriteFile(filepath.Join(tempDir, FileName), []byte(configJSON), 0o644); err != nil {
 		t.Fatalf("write config file: %v", err)
@@ -46,6 +48,8 @@ func TestLoad_FileWinsOverEnv(t *testing.T) {
 		"PACKET_LOG":                  "false",
 		"PACKET_LOG_SAMPLE_N":         "0",
 		"PACKET_LOG_ON_ANOMALY":       "true",
+		"LOG_LEVEL":                   "error",
+		"LOG_FORMAT":                  "json",
 	})
 
 	cfg, err := Load()
@@ -66,14 +70,16 @@ func TestLoad_FileWinsOverEnv(t *testing.T) {
 		cfg.StatsLogIntervalSec != 8 ||
 		!cfg.PacketLog ||
 		cfg.PacketLogSampleN != 13 ||
-		cfg.PacketLogOnAnomaly {
+		cfg.PacketLogOnAnomaly ||
+		cfg.LogLevel != "debug" ||
+		cfg.LogFormat != "text" {
 		t.Fatalf("expected file config values, got %+v", cfg)
 	}
 }
 
 func TestLoad_EnvFallbackWhenFileAbsent(t *testing.T) {
 	tempDir := t.TempDir()
-	chdir(t, tempDir)
+	withExecutableDir(t, tempDir)
 
 	setAllEnv(t, map[string]string{
 		"API_LISTEN_ADDR":             "0.0.0.0:7070",
@@ -90,6 +96,8 @@ func TestLoad_EnvFallbackWhenFileAbsent(t *testing.T) {
 		"PACKET_LOG":                  "true",
 		"PACKET_LOG_SAMPLE_N":         "4",
 		"PACKET_LOG_ON_ANOMALY":       "false",
+		"LOG_LEVEL":                   "warn",
+		"LOG_FORMAT":                  "text",
 	})
 
 	cfg, err := Load()
@@ -110,14 +118,16 @@ func TestLoad_EnvFallbackWhenFileAbsent(t *testing.T) {
 		cfg.StatsLogIntervalSec != 9 ||
 		!cfg.PacketLog ||
 		cfg.PacketLogSampleN != 4 ||
-		cfg.PacketLogOnAnomaly {
+		cfg.PacketLogOnAnomaly ||
+		cfg.LogLevel != "warn" ||
+		cfg.LogFormat != "text" {
 		t.Fatalf("expected env config values, got %+v", cfg)
 	}
 }
 
 func TestLoad_InvalidFileReturnsError(t *testing.T) {
 	tempDir := t.TempDir()
-	chdir(t, tempDir)
+	withExecutableDir(t, tempDir)
 
 	if err := os.WriteFile(filepath.Join(tempDir, FileName), []byte("{broken json"), 0o644); err != nil {
 		t.Fatalf("write invalid config file: %v", err)
@@ -129,6 +139,31 @@ func TestLoad_InvalidFileReturnsError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "parse config file") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoad_UsesExecutableDirInsteadOfWorkingDir(t *testing.T) {
+	execDir := t.TempDir()
+	otherDir := t.TempDir()
+	withExecutableDir(t, execDir)
+	chdir(t, otherDir)
+
+	execConfig := `{"api_listen_addr":"127.0.0.1:8181","log_level":"error","log_format":"text"}`
+	if err := os.WriteFile(filepath.Join(execDir, FileName), []byte(execConfig), 0o644); err != nil {
+		t.Fatalf("write config in executable dir: %v", err)
+	}
+
+	wdConfig := `{"api_listen_addr":"127.0.0.1:9191"}`
+	if err := os.WriteFile(filepath.Join(otherDir, FileName), []byte(wdConfig), 0o644); err != nil {
+		t.Fatalf("write config in working dir: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.APIListenAddr != "127.0.0.1:8181" {
+		t.Fatalf("expected config from executable dir, got %+v", cfg)
 	}
 }
 
@@ -145,6 +180,17 @@ func chdir(t *testing.T, dir string) {
 		if err := os.Chdir(oldWD); err != nil {
 			t.Fatalf("restore wd: %v", err)
 		}
+	})
+}
+
+func withExecutableDir(t *testing.T, dir string) {
+	t.Helper()
+	orig := resolveExecutableDir
+	resolveExecutableDir = func() (string, error) {
+		return dir, nil
+	}
+	t.Cleanup(func() {
+		resolveExecutableDir = orig
 	})
 }
 

@@ -6,8 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-
-	"rtp-stream-cleaner/internal/logging"
 )
 
 const FileName = "config.json"
@@ -27,27 +25,39 @@ type Config struct {
 	PacketLog               bool   `json:"packet_log"`
 	PacketLogSampleN        int    `json:"packet_log_sample_n"`
 	PacketLogOnAnomaly      bool   `json:"packet_log_on_anomaly"`
+	LogLevel                string `json:"log_level"`
+	LogFormat               string `json:"log_format"`
+}
+
+var resolveExecutableDir = func() (string, error) {
+	exePath, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("resolve executable path: %w", err)
+	}
+	resolvedPath, err := filepath.EvalSymlinks(exePath)
+	if err != nil {
+		return "", fmt.Errorf("resolve executable symlink %s: %w", exePath, err)
+	}
+	return filepath.Dir(resolvedPath), nil
 }
 
 func Load() (Config, error) {
-	cwd, err := os.Getwd()
+	execDir, err := resolveExecutableDir()
 	if err != nil {
-		return Config{}, fmt.Errorf("resolve current working directory: %w", err)
+		return Config{}, err
 	}
 
-	path := filepath.Join(cwd, FileName)
+	path := filepath.Join(execDir, FileName)
 	if _, err := os.Stat(path); err == nil {
 		cfg, err := loadFromFile(path)
 		if err != nil {
 			return Config{}, err
 		}
-		logging.L().Info("loaded config", "source", "file", "path", path)
 		return cfg, nil
 	} else if !os.IsNotExist(err) {
 		return Config{}, fmt.Errorf("stat config file %s: %w", path, err)
 	}
 
-	logging.L().Info("loaded config", "source", "env")
 	return loadFromEnv(), nil
 }
 
@@ -81,6 +91,8 @@ func loadFromEnv() Config {
 		PacketLog:               packetLog,
 		PacketLogSampleN:        getEnvInt("PACKET_LOG_SAMPLE_N", 0),
 		PacketLogOnAnomaly:      getEnvBool("PACKET_LOG_ON_ANOMALY", packetLog),
+		LogLevel:                getEnv("LOG_LEVEL", "info"),
+		LogFormat:               getEnv("LOG_FORMAT", "json"),
 	}
 }
 

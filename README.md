@@ -23,6 +23,10 @@ PUBLIC_IP=203.0.113.10 ./bin/rtp-cleaner
 
 ## Environment variables
 
+
+Service first tries to read `config.json` from the same directory as the `rtp-cleaner` executable.
+If the file is absent, it falls back to environment variables.
+
 | Variable | Default | Description |
 | --- | --- | --- |
 | `API_LISTEN_ADDR` | `0.0.0.0:8080` | HTTP listen address. |
