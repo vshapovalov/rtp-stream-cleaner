@@ -12,12 +12,14 @@ import (
 )
 
 func main() {
-	logger := logging.L()
 	cfg, err := config.Load()
 	if err != nil {
-		logger.Error("failed to load config", "error", err)
+		logging.L().Error("failed to load config", "error", err)
 		os.Exit(1)
 	}
+
+	logging.Configure(logging.Config{Level: cfg.LogLevel, Format: cfg.LogFormat})
+	logger := logging.L()
 
 	if cfg.PublicIP != "" {
 		logger.Info("public_ip configured", "public_ip", cfg.PublicIP)

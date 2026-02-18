@@ -9,13 +9,35 @@ import (
 
 var (
 	logger *slog.Logger
-	once   sync.Once
+	mu     sync.RWMutex
 )
+
+type Config struct {
+	Level  string
+	Format string
+}
 
 // L returns the configured slog logger.
 func L() *slog.Logger {
-	once.Do(initLogger)
+	mu.RLock()
+	current := logger
+	mu.RUnlock()
+	if current != nil {
+		return current
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if logger == nil {
+		initLoggerLocked(Config{Level: os.Getenv("LOG_LEVEL"), Format: os.Getenv("LOG_FORMAT")})
+	}
 	return logger
+}
+
+func Configure(cfg Config) {
+	mu.Lock()
+	defer mu.Unlock()
+	initLoggerLocked(cfg)
 }
 
 // WithSessionID attaches the session_id field to all log entries.
@@ -23,12 +45,12 @@ func WithSessionID(sessionID string) *slog.Logger {
 	return L().With("session_id", sessionID)
 }
 
-func initLogger() {
+func initLoggerLocked(cfg Config) {
 	handlerOptions := &slog.HandlerOptions{
-		Level: parseLevel(os.Getenv("LOG_LEVEL")),
+		Level: parseLevel(cfg.Level),
 	}
 	var handler slog.Handler
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("LOG_FORMAT"))) {
+	switch strings.ToLower(strings.TrimSpace(cfg.Format)) {
 	case "text":
 		handler = slog.NewTextHandler(os.Stdout, handlerOptions)
 	default:

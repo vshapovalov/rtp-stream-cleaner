@@ -12,5 +12,7 @@
   "stats_log_interval_sec": 5,
   "packet_log": false,
   "packet_log_sample_n": 0,
-  "packet_log_on_anomaly": false
+  "packet_log_on_anomaly": false,
+  "log_level": "info",
+  "log_format": "json"
 }
