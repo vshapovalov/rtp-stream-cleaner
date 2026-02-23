@@ -57,6 +57,7 @@ type VideoCounters struct {
 
 type videoProxy struct {
 	session             *Session
+	direction           string
 	aConn               *net.UDPConn
 	bConn               *net.UDPConn
 	peerLearningWindow  time.Duration
@@ -100,6 +101,7 @@ func newVideoProxy(session *Session, aConn, bConn *net.UDPConn, peerLearningWind
 	}
 	proxy := &videoProxy{
 		session:            session,
+		direction:          inferProxyDirection(aConn, bConn, session.Video.APort, session.Video.BPort),
 		aConn:              aConn,
 		bConn:              bConn,
 		peerLearningWindow: peerLearningWindow,
@@ -334,6 +336,7 @@ func (p *videoProxy) logStats(final bool) {
 	}
 	if final {
 		p.logger.Info("video.proxy.stats",
+			"direction", p.direction,
 			"pkts_in", pktsIn,
 			"pkts_out", pktsOut,
 			"bytes_in", bytesIn,
@@ -353,6 +356,7 @@ func (p *videoProxy) logStats(final bool) {
 		return
 	}
 	p.logger.Info("video.proxy.stats",
+		"direction", p.direction,
 		"pkts_in", pktsIn,
 		"pkts_out", pktsOut,
 		"bytes_in", bytesIn,

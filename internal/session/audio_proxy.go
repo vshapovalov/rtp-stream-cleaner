@@ -41,6 +41,7 @@ type AudioCounters struct {
 
 type audioProxy struct {
 	session             *Session
+	direction           string
 	aConn               *net.UDPConn
 	bConn               *net.UDPConn
 	peerLearningWindow  time.Duration
@@ -61,6 +62,7 @@ type audioProxy struct {
 func newAudioProxy(session *Session, aConn, bConn *net.UDPConn, peerLearningWindow time.Duration, logConfig ProxyLogConfig) *audioProxy {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &audioProxy{
+		direction:          inferProxyDirection(aConn, bConn, session.Audio.APort, session.Audio.BPort),
 		session:            session,
 		aConn:              aConn,
 		bConn:              bConn,
@@ -273,6 +275,7 @@ func (p *audioProxy) logStats(final bool) {
 	}
 	if final {
 		p.logger.Info("audio.proxy.stats",
+			"direction", p.direction,
 			"pkts_in", pktsIn,
 			"pkts_out", pktsOut,
 			"bytes_in", bytesIn,
@@ -286,6 +289,7 @@ func (p *audioProxy) logStats(final bool) {
 		return
 	}
 	p.logger.Info("audio.proxy.stats",
+		"direction", p.direction,
 		"pkts_in", pktsIn,
 		"pkts_out", pktsOut,
 		"bytes_in", bytesIn,
