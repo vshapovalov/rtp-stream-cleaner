@@ -16,16 +16,21 @@ import (
 const udpReadBufferSize = 2048
 
 type audioCounters struct {
-	aInPkts         atomic.Uint64
-	aInBytes        atomic.Uint64
-	bOutPkts        atomic.Uint64
-	bOutBytes       atomic.Uint64
-	bInPkts         atomic.Uint64
-	bInBytes        atomic.Uint64
-	aOutPkts        atomic.Uint64
-	aOutBytes       atomic.Uint64
-	drops           atomic.Uint64
-	ignoredDisabled atomic.Uint64
+	aToB audioDirectionCounters
+	bToA audioDirectionCounters
+}
+
+type audioDirectionCounters struct {
+	pktsIn                 atomic.Uint64
+	pktsOut                atomic.Uint64
+	bytesIn                atomic.Uint64
+	bytesOut               atomic.Uint64
+	ignoredDisabled        atomic.Uint64
+	dropDestNotSet         atomic.Uint64
+	dropDestIPMismatch     atomic.Uint64
+	dropPeerNotLearned     atomic.Uint64
+	dropPeerUpdateRejected atomic.Uint64
+	dropWriteError         atomic.Uint64
 }
 
 type AudioCounters struct {
@@ -41,7 +46,6 @@ type AudioCounters struct {
 
 type audioProxy struct {
 	session             *Session
-	direction           string
 	aConn               *net.UDPConn
 	bConn               *net.UDPConn
 	peerLearningWindow  time.Duration
@@ -62,7 +66,6 @@ type audioProxy struct {
 func newAudioProxy(session *Session, aConn, bConn *net.UDPConn, peerLearningWindow time.Duration, logConfig ProxyLogConfig) *audioProxy {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &audioProxy{
-		direction:          inferProxyDirection(aConn, bConn, session.Audio.APort, session.Audio.BPort),
 		session:            session,
 		aConn:              aConn,
 		bConn:              bConn,
@@ -129,30 +132,30 @@ func (p *audioProxy) loopAIn() {
 			continue
 		}
 		p.session.markActivity(time.Now())
-		p.session.audioCounters.aInPkts.Add(1)
-		p.session.audioCounters.aInBytes.Add(uint64(n))
+		p.session.audioCounters.aToB.pktsIn.Add(1)
+		p.session.audioCounters.aToB.bytesIn.Add(uint64(n))
 		if !p.session.audioEnabled.Load() {
-			p.session.audioCounters.ignoredDisabled.Add(1)
+			p.session.audioCounters.aToB.ignoredDisabled.Add(1)
 			continue
 		}
 		p.logPacketIfNeeded(buffer[:n], n, "a->b", &packetCount, &lastSeq, &hasLastSeq)
 		if !p.updateDoorphonePeer(addr) {
-			p.session.audioCounters.drops.Add(1)
+			p.session.audioCounters.aToB.dropPeerUpdateRejected.Add(1)
 			continue
 		}
 		dest := p.session.audioDest.Load()
 		if dest == nil {
 			p.logMissingDest()
-			p.session.audioCounters.drops.Add(1)
+			p.session.audioCounters.aToB.dropDestNotSet.Add(1)
 			continue
 		}
 		if _, err := p.bConn.WriteToUDP(buffer[:n], dest); err != nil {
 			p.logger.Error("audio b leg write failed", "error", err)
-			p.session.audioCounters.drops.Add(1)
+			p.session.audioCounters.aToB.dropWriteError.Add(1)
 			continue
 		}
-		p.session.audioCounters.bOutPkts.Add(1)
-		p.session.audioCounters.bOutBytes.Add(uint64(n))
+		p.session.audioCounters.aToB.pktsOut.Add(1)
+		p.session.audioCounters.aToB.bytesOut.Add(uint64(n))
 	}
 }
 
@@ -181,29 +184,33 @@ func (p *audioProxy) loopBIn() {
 		}
 		p.session.markActivity(time.Now())
 		if !p.session.audioEnabled.Load() {
-			p.session.audioCounters.ignoredDisabled.Add(1)
+			p.session.audioCounters.bToA.ignoredDisabled.Add(1)
 			continue
 		}
 		dest := p.session.audioDest.Load()
-		if dest == nil || !dest.IP.Equal(addr.IP) {
-			p.session.audioCounters.drops.Add(1)
+		if dest == nil {
+			p.session.audioCounters.bToA.dropDestNotSet.Add(1)
 			continue
 		}
-		p.session.audioCounters.bInPkts.Add(1)
-		p.session.audioCounters.bInBytes.Add(uint64(n))
+		if !dest.IP.Equal(addr.IP) {
+			p.session.audioCounters.bToA.dropDestIPMismatch.Add(1)
+			continue
+		}
+		p.session.audioCounters.bToA.pktsIn.Add(1)
+		p.session.audioCounters.bToA.bytesIn.Add(uint64(n))
 		p.logPacketIfNeeded(buffer[:n], n, "b->a", &packetCount, &lastSeq, &hasLastSeq)
 		peer := p.getDoorphonePeer()
 		if peer == nil {
-			p.session.audioCounters.drops.Add(1)
+			p.session.audioCounters.bToA.dropPeerNotLearned.Add(1)
 			continue
 		}
 		if _, err := p.aConn.WriteToUDP(buffer[:n], peer); err != nil {
 			p.logger.Error("audio a leg write failed", "error", err)
-			p.session.audioCounters.drops.Add(1)
+			p.session.audioCounters.bToA.dropWriteError.Add(1)
 			continue
 		}
-		p.session.audioCounters.aOutPkts.Add(1)
-		p.session.audioCounters.aOutBytes.Add(uint64(n))
+		p.session.audioCounters.bToA.pktsOut.Add(1)
+		p.session.audioCounters.bToA.bytesOut.Add(uint64(n))
 	}
 }
 
@@ -261,44 +268,36 @@ func (p *audioProxy) logStatsLoop() {
 }
 
 func (p *audioProxy) logStats(final bool) {
-	counters := &p.session.audioCounters
-	pktsIn := counters.aInPkts.Load() + counters.bInPkts.Load()
-	pktsOut := counters.aOutPkts.Load() + counters.bOutPkts.Load()
-	bytesIn := counters.aInBytes.Load() + counters.bInBytes.Load()
-	bytesOut := counters.aOutBytes.Load() + counters.bOutBytes.Load()
-	drops := counters.drops.Load()
-	ignoredDisabled := counters.ignoredDisabled.Load()
+	snapshots := snapshotAudioDirectionalStats(&p.session.audioCounters)
 	enabled := p.session.audioEnabled.Load()
 	disabledReason := loadAtomicString(&p.session.audioDisabledReason)
 	if enabled {
 		disabledReason = ""
 	}
-	if final {
-		p.logger.Info("audio.proxy.stats",
-			"direction", p.direction,
-			"pkts_in", pktsIn,
-			"pkts_out", pktsOut,
-			"bytes_in", bytesIn,
-			"bytes_out", bytesOut,
-			"drops", drops,
-			"ignored_disabled", ignoredDisabled,
+	for _, snapshot := range snapshots {
+		args := []any{
+			"direction", snapshot.Direction,
+			"pkts_in", snapshot.PktsIn,
+			"pkts_out", snapshot.PktsOut,
+			"bytes_in", snapshot.BytesIn,
+			"bytes_out", snapshot.BytesOut,
+			"drops_total", snapshot.DropsTotal,
+			"drop_dest_not_set", snapshot.DropDestNotSet,
+			"drop_dest_ip_mismatch", snapshot.DropDestIPMismatch,
+			"drop_peer_not_learned", snapshot.DropPeerNotLearned,
+			"drop_peer_update_rejected", snapshot.DropPeerUpdateRejected,
+			"drop_write_error", snapshot.DropWriteError,
+			"ignored_disabled", snapshot.IgnoredDisabled,
 			"enabled", enabled,
 			"disabled_reason", disabledReason,
-			"final", true,
+		}
+		if final {
+			args = append(args, "final", true)
+		}
+		p.logger.Info("audio.proxy.stats",
+			args...,
 		)
-		return
 	}
-	p.logger.Info("audio.proxy.stats",
-		"direction", p.direction,
-		"pkts_in", pktsIn,
-		"pkts_out", pktsOut,
-		"bytes_in", bytesIn,
-		"bytes_out", bytesOut,
-		"drops", drops,
-		"ignored_disabled", ignoredDisabled,
-		"enabled", enabled,
-		"disabled_reason", disabledReason,
-	)
 }
 
 func (p *audioProxy) logPacketIfNeeded(packet []byte, size int, direction string, packetCount *uint64, lastSeq *uint16, hasLastSeq *bool) {
@@ -350,13 +349,63 @@ func snapshotAudioCounters(counters *audioCounters) AudioCounters {
 		return AudioCounters{}
 	}
 	return AudioCounters{
-		AInPkts:   counters.aInPkts.Load(),
-		AInBytes:  counters.aInBytes.Load(),
-		BOutPkts:  counters.bOutPkts.Load(),
-		BOutBytes: counters.bOutBytes.Load(),
-		BInPkts:   counters.bInPkts.Load(),
-		BInBytes:  counters.bInBytes.Load(),
-		AOutPkts:  counters.aOutPkts.Load(),
-		AOutBytes: counters.aOutBytes.Load(),
+		AInPkts:   counters.aToB.pktsIn.Load(),
+		AInBytes:  counters.aToB.bytesIn.Load(),
+		BOutPkts:  counters.aToB.pktsOut.Load(),
+		BOutBytes: counters.aToB.bytesOut.Load(),
+		BInPkts:   counters.bToA.pktsIn.Load(),
+		BInBytes:  counters.bToA.bytesIn.Load(),
+		AOutPkts:  counters.bToA.pktsOut.Load(),
+		AOutBytes: counters.bToA.bytesOut.Load(),
 	}
+}
+
+type audioDirectionalStats struct {
+	Direction              string
+	PktsIn                 uint64
+	PktsOut                uint64
+	BytesIn                uint64
+	BytesOut               uint64
+	IgnoredDisabled        uint64
+	DropsTotal             uint64
+	DropDestNotSet         uint64
+	DropDestIPMismatch     uint64
+	DropPeerNotLearned     uint64
+	DropPeerUpdateRejected uint64
+	DropWriteError         uint64
+}
+
+func snapshotAudioDirectionalStats(counters *audioCounters) []audioDirectionalStats {
+	if counters == nil {
+		return nil
+	}
+	aToB := audioDirectionalStats{
+		Direction:              proxyDirectionAToB,
+		PktsIn:                 counters.aToB.pktsIn.Load(),
+		PktsOut:                counters.aToB.pktsOut.Load(),
+		BytesIn:                counters.aToB.bytesIn.Load(),
+		BytesOut:               counters.aToB.bytesOut.Load(),
+		IgnoredDisabled:        counters.aToB.ignoredDisabled.Load(),
+		DropDestNotSet:         counters.aToB.dropDestNotSet.Load(),
+		DropDestIPMismatch:     counters.aToB.dropDestIPMismatch.Load(),
+		DropPeerNotLearned:     counters.aToB.dropPeerNotLearned.Load(),
+		DropPeerUpdateRejected: counters.aToB.dropPeerUpdateRejected.Load(),
+		DropWriteError:         counters.aToB.dropWriteError.Load(),
+	}
+	bToA := audioDirectionalStats{
+		Direction:              proxyDirectionBToA,
+		PktsIn:                 counters.bToA.pktsIn.Load(),
+		PktsOut:                counters.bToA.pktsOut.Load(),
+		BytesIn:                counters.bToA.bytesIn.Load(),
+		BytesOut:               counters.bToA.bytesOut.Load(),
+		IgnoredDisabled:        counters.bToA.ignoredDisabled.Load(),
+		DropDestNotSet:         counters.bToA.dropDestNotSet.Load(),
+		DropDestIPMismatch:     counters.bToA.dropDestIPMismatch.Load(),
+		DropPeerNotLearned:     counters.bToA.dropPeerNotLearned.Load(),
+		DropPeerUpdateRejected: counters.bToA.dropPeerUpdateRejected.Load(),
+		DropWriteError:         counters.bToA.dropWriteError.Load(),
+	}
+	aToB.DropsTotal = aToB.DropDestNotSet + aToB.DropDestIPMismatch + aToB.DropPeerNotLearned + aToB.DropPeerUpdateRejected + aToB.DropWriteError
+	bToA.DropsTotal = bToA.DropDestNotSet + bToA.DropDestIPMismatch + bToA.DropPeerNotLearned + bToA.DropPeerUpdateRejected + bToA.DropWriteError
+	return []audioDirectionalStats{aToB, bToA}
 }
