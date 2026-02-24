@@ -11,12 +11,12 @@ import (
 
 func baseEnv(idleTimeoutSec string) map[string]string {
 	env := map[string]string{
-		"PUBLIC_IP":                "127.0.0.1",
-		"INTERNAL_IP":              "127.0.0.1",
-		"PEER_LEARNING_WINDOW_SEC": "1",
-		"MAX_FRAME_WAIT_MS":        "150",
-		"RTP_PORT_MIN":             "35000",
-		"RTP_PORT_MAX":             "35020",
+		"PUBLIC_IP":                 "127.0.0.1",
+		"INTERNAL_IP":               "127.0.0.1",
+		"PEER_LEARNING_MIN_PACKETS": "1",
+		"MAX_FRAME_WAIT_MS":         "150",
+		"RTP_PORT_MIN":              "35000",
+		"RTP_PORT_MAX":              "35020",
 	}
 	if idleTimeoutSec != "" {
 		env["IDLE_TIMEOUT_SEC"] = idleTimeoutSec
@@ -74,7 +74,7 @@ func packetsForSSRC(stats []rtpPeerSourceStats, ssrc uint32) int {
 // assert that POST returns a session ID and ports, GET echoes the same ID, DELETE
 // returns 200, and a follow-up GET yields 404. The counters are stable because we
 // do not send media: audio/video packet counters should remain at zero implicitly.
-// Env used: PUBLIC_IP/INTERNAL_IP=127.0.0.1, PEER_LEARNING_WINDOW_SEC=1,
+// Env used: PUBLIC_IP/INTERNAL_IP=127.0.0.1, PEER_LEARNING_MIN_PACKETS=1,
 // IDLE_TIMEOUT_SEC=10, MAX_FRAME_WAIT_MS=150, RTP_PORT_MIN/MAX. We avoid flakes by
 // polling /v1/health before requests and by polling API responses instead of using
 // fixed sleeps.
@@ -134,7 +134,7 @@ func TestIntegrationA1CreateGetDelete(t *testing.T) {
 // fails before provisioning. No PCAP/SSRCs are involved. The counters are irrelevant
 // here; we assert the API returns 400 for malformed input (wrong field type) to
 // ensure schema validation is enforced. Env used: PUBLIC_IP/INTERNAL_IP=127.0.0.1,
-// PEER_LEARNING_WINDOW_SEC=1, IDLE_TIMEOUT_SEC=10, MAX_FRAME_WAIT_MS=150,
+// PEER_LEARNING_MIN_PACKETS=1, IDLE_TIMEOUT_SEC=10, MAX_FRAME_WAIT_MS=150,
 // RTP_PORT_MIN/MAX. We avoid flakes by polling /v1/health before the request and
 // by checking the HTTP response directly (no sleeps, no timing assumptions).
 func TestIntegrationA2CreateValidation(t *testing.T) {
@@ -165,7 +165,7 @@ func TestIntegrationA2CreateValidation(t *testing.T) {
 // TestIntegrationA3UpdateUnknown checks that updating a nonexistent session is
 // rejected with 404. Topology is still conceptual A-leg/B-leg, but no session is
 // allocated, so no ports, PCAPs, or SSRCs are used. Counters remain unused. Env
-// used: PUBLIC_IP/INTERNAL_IP=127.0.0.1, PEER_LEARNING_WINDOW_SEC=1,
+// used: PUBLIC_IP/INTERNAL_IP=127.0.0.1, PEER_LEARNING_MIN_PACKETS=1,
 // IDLE_TIMEOUT_SEC=10, MAX_FRAME_WAIT_MS=150, RTP_PORT_MIN/MAX. We avoid flakes
 // by polling /v1/health and issuing a single HTTP request without sleeps.
 func TestIntegrationA3UpdateUnknown(t *testing.T) {
@@ -193,7 +193,7 @@ func TestIntegrationA3UpdateUnknown(t *testing.T) {
 // involved. Counters are stable (zero) because we never send media; we assert the
 // API state instead: first update sets audio rtpengine_dest only, then video update
 // sets video dest while preserving the earlier audio dest. Env used:
-// PUBLIC_IP/INTERNAL_IP=127.0.0.1, PEER_LEARNING_WINDOW_SEC=1, IDLE_TIMEOUT_SEC=10,
+// PUBLIC_IP/INTERNAL_IP=127.0.0.1, PEER_LEARNING_MIN_PACKETS=1, IDLE_TIMEOUT_SEC=10,
 // MAX_FRAME_WAIT_MS=150, RTP_PORT_MIN/MAX. We avoid flakes by polling /v1/health
 // and relying on deterministic GET responses rather than sleeps.
 func TestIntegrationA4PartialUpdate(t *testing.T) {
@@ -259,7 +259,7 @@ func TestIntegrationA4PartialUpdate(t *testing.T) {
 // B-leg. We poll GET until audio_b_out_pkts > 0 (no sleeps) to prove forwarding,
 // then DELETE the session and verify the receiver PCAP packet count stops
 // increasing across two list-sources reads. Env used: PUBLIC_IP/INTERNAL_IP=127.0.0.1,
-// PEER_LEARNING_WINDOW_SEC=1, IDLE_TIMEOUT_SEC=10, MAX_FRAME_WAIT_MS=150,
+// PEER_LEARNING_MIN_PACKETS=1, IDLE_TIMEOUT_SEC=10, MAX_FRAME_WAIT_MS=150,
 // RTP_PORT_MIN/MAX. Flake avoidance: API polling for counters, bounded receiver
 // duration, and checking for stable packet counts rather than timing assumptions.
 func TestIntegrationA5DeleteActiveStopsTraffic(t *testing.T) {
@@ -370,7 +370,7 @@ func TestIntegrationA5DeleteActiveStopsTraffic(t *testing.T) {
 // A-leg/B-leg ports, but we intentionally send no PCAP/SSRCs to keep counters at
 // zero. We poll GET until a 404 is returned (no sleeps), which is stable because
 // the idle reaper is time-driven and uses the environment configuration. Env used:
-// PUBLIC_IP/INTERNAL_IP=127.0.0.1, PEER_LEARNING_WINDOW_SEC=1, IDLE_TIMEOUT_SEC=2,
+// PUBLIC_IP/INTERNAL_IP=127.0.0.1, PEER_LEARNING_MIN_PACKETS=1, IDLE_TIMEOUT_SEC=2,
 // MAX_FRAME_WAIT_MS=150, RTP_PORT_MIN/MAX. Flake avoidance: bounded polling loop
 // rather than a single long sleep, so the assertion tolerates scheduler jitter.
 func TestIntegrationB1IdleAutoDelete(t *testing.T) {
@@ -404,7 +404,7 @@ func TestIntegrationB1IdleAutoDelete(t *testing.T) {
 // receiver on the B-leg. Counters: audio_a_in_pkts and audio_b_out_pkts should
 // advance while sending, and we expect GET to remain 200 during the send even
 // though IDLE_TIMEOUT_SEC=2. Env used: PUBLIC_IP/INTERNAL_IP=127.0.0.1,
-// PEER_LEARNING_WINDOW_SEC=1, IDLE_TIMEOUT_SEC=2, MAX_FRAME_WAIT_MS=150,
+// PEER_LEARNING_MIN_PACKETS=1, IDLE_TIMEOUT_SEC=2, MAX_FRAME_WAIT_MS=150,
 // RTP_PORT_MIN/MAX. Flake avoidance: we poll API counters instead of sleeping
 // to detect active traffic and check for 200 responses during the send window.
 func TestIntegrationB2ActiveSessionNotDeleted(t *testing.T) {
@@ -501,7 +501,7 @@ func TestIntegrationB2ActiveSessionNotDeleted(t *testing.T) {
 // B-leg receiver. We capture recv.pcap and list sources to ensure only the audio
 // SSRC appears. Counters: audio_a_in_pkts/audio_b_out_pkts should increase, while
 // all video counters remain zero because no video packets reach the cleaner. Env
-// used: PUBLIC_IP/INTERNAL_IP=127.0.0.1, PEER_LEARNING_WINDOW_SEC=1,
+// used: PUBLIC_IP/INTERNAL_IP=127.0.0.1, PEER_LEARNING_MIN_PACKETS=1,
 // IDLE_TIMEOUT_SEC=10, MAX_FRAME_WAIT_MS=150, RTP_PORT_MIN/MAX. Flake avoidance:
 // poll API counters for audio activity instead of sleeping and assert video
 // counters are zero after the send completes.

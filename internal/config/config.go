@@ -11,22 +11,24 @@ import (
 const FileName = "config.json"
 
 type Config struct {
-	APIListenAddr           string `json:"api_listen_addr"`
-	ServicePassword         string `json:"service_password"`
-	PublicIP                string `json:"public_ip"`
-	InternalIP              string `json:"internal_ip"`
-	RTPPortMin              int    `json:"rtp_port_min"`
-	RTPPortMax              int    `json:"rtp_port_max"`
-	PeerLearningWindowSec   int    `json:"peer_learning_window_sec"`
-	MaxFrameWaitMS          int    `json:"max_frame_wait_ms"`
-	IdleTimeoutSec          int    `json:"idle_timeout_sec"`
-	VideoInjectCachedSPSPPS bool   `json:"video_inject_cached_sps_pps"`
-	StatsLogIntervalSec     int    `json:"stats_log_interval_sec"`
-	PacketLog               bool   `json:"packet_log"`
-	PacketLogSampleN        int    `json:"packet_log_sample_n"`
-	PacketLogOnAnomaly      bool   `json:"packet_log_on_anomaly"`
-	LogLevel                string `json:"log_level"`
-	LogFormat               string `json:"log_format"`
+	APIListenAddr              string `json:"api_listen_addr"`
+	ServicePassword            string `json:"service_password"`
+	PublicIP                   string `json:"public_ip"`
+	InternalIP                 string `json:"internal_ip"`
+	RTPPortMin                 int    `json:"rtp_port_min"`
+	RTPPortMax                 int    `json:"rtp_port_max"`
+	PeerLearningMinPackets     int    `json:"peer_learning_min_packets"`
+	PeerRelearnIdleMS          int    `json:"peer_relearn_idle_ms"`
+	PeerLearningCandidateTTLMS int    `json:"peer_learning_candidate_ttl_ms"`
+	MaxFrameWaitMS             int    `json:"max_frame_wait_ms"`
+	IdleTimeoutSec             int    `json:"idle_timeout_sec"`
+	VideoInjectCachedSPSPPS    bool   `json:"video_inject_cached_sps_pps"`
+	StatsLogIntervalSec        int    `json:"stats_log_interval_sec"`
+	PacketLog                  bool   `json:"packet_log"`
+	PacketLogSampleN           int    `json:"packet_log_sample_n"`
+	PacketLogOnAnomaly         bool   `json:"packet_log_on_anomaly"`
+	LogLevel                   string `json:"log_level"`
+	LogFormat                  string `json:"log_format"`
 }
 
 var resolveExecutableDir = func() (string, error) {
@@ -77,22 +79,24 @@ func loadFromFile(path string) (Config, error) {
 func loadFromEnv() Config {
 	packetLog := getEnvBool("PACKET_LOG", false)
 	return Config{
-		APIListenAddr:           getEnv("API_LISTEN_ADDR", "0.0.0.0:8080"),
-		ServicePassword:         os.Getenv("SERVICE_PASSWORD"),
-		PublicIP:                os.Getenv("PUBLIC_IP"),
-		InternalIP:              os.Getenv("INTERNAL_IP"),
-		RTPPortMin:              getEnvInt("RTP_PORT_MIN", 30000),
-		RTPPortMax:              getEnvInt("RTP_PORT_MAX", 40000),
-		PeerLearningWindowSec:   getEnvInt("PEER_LEARNING_WINDOW_SEC", 10),
-		MaxFrameWaitMS:          getEnvInt("MAX_FRAME_WAIT_MS", 120),
-		IdleTimeoutSec:          getEnvInt("IDLE_TIMEOUT_SEC", 60),
-		VideoInjectCachedSPSPPS: getEnvBool("VIDEO_INJECT_CACHED_SPS_PPS", false),
-		StatsLogIntervalSec:     getEnvInt("STATS_LOG_INTERVAL_SEC", 5),
-		PacketLog:               packetLog,
-		PacketLogSampleN:        getEnvInt("PACKET_LOG_SAMPLE_N", 0),
-		PacketLogOnAnomaly:      getEnvBool("PACKET_LOG_ON_ANOMALY", packetLog),
-		LogLevel:                getEnv("LOG_LEVEL", "info"),
-		LogFormat:               getEnv("LOG_FORMAT", "json"),
+		APIListenAddr:              getEnv("API_LISTEN_ADDR", "0.0.0.0:8080"),
+		ServicePassword:            os.Getenv("SERVICE_PASSWORD"),
+		PublicIP:                   os.Getenv("PUBLIC_IP"),
+		InternalIP:                 os.Getenv("INTERNAL_IP"),
+		RTPPortMin:                 getEnvInt("RTP_PORT_MIN", 30000),
+		RTPPortMax:                 getEnvInt("RTP_PORT_MAX", 40000),
+		PeerLearningMinPackets:     getEnvInt("PEER_LEARNING_MIN_PACKETS", 5),
+		PeerRelearnIdleMS:          getEnvInt("PEER_RELEARN_IDLE_MS", 1000),
+		PeerLearningCandidateTTLMS: getEnvInt("PEER_LEARNING_CANDIDATE_TTL_MS", 4000),
+		MaxFrameWaitMS:             getEnvInt("MAX_FRAME_WAIT_MS", 120),
+		IdleTimeoutSec:             getEnvInt("IDLE_TIMEOUT_SEC", 60),
+		VideoInjectCachedSPSPPS:    getEnvBool("VIDEO_INJECT_CACHED_SPS_PPS", false),
+		StatsLogIntervalSec:        getEnvInt("STATS_LOG_INTERVAL_SEC", 5),
+		PacketLog:                  packetLog,
+		PacketLogSampleN:           getEnvInt("PACKET_LOG_SAMPLE_N", 0),
+		PacketLogOnAnomaly:         getEnvBool("PACKET_LOG_ON_ANOMALY", packetLog),
+		LogLevel:                   getEnv("LOG_LEVEL", "info"),
+		LogFormat:                  getEnv("LOG_FORMAT", "json"),
 	}
 }
 

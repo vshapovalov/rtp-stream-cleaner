@@ -64,7 +64,7 @@ type videoProxy struct {
 	session             *Session
 	aConn               *net.UDPConn
 	bConn               *net.UDPConn
-	peerLearningWindow  time.Duration
+	peerLearningTracker *peerLearningTracker
 	maxFrameWait        time.Duration
 	statsInterval       time.Duration
 	packetLog           bool
@@ -74,9 +74,6 @@ type videoProxy struct {
 	ctx                 context.Context
 	cancel              context.CancelFunc
 	wg                  sync.WaitGroup
-	peerMu              sync.RWMutex
-	doorphonePeer       *net.UDPAddr
-	doorphoneLearnedAt  time.Time
 	lastMissingDestNsec atomic.Int64
 	frameBuffer         [][]byte
 	frameBufferStart    time.Time
@@ -100,26 +97,27 @@ type videoProxy struct {
 	bToASources         proxySourceStats
 }
 
-func newVideoProxy(session *Session, aConn, bConn *net.UDPConn, peerLearningWindow, maxFrameWait time.Duration, fixEnabled, injectCachedSPSPPS bool, logConfig ProxyLogConfig) *videoProxy {
+func newVideoProxy(session *Session, aConn, bConn *net.UDPConn, minPackets int, candidateTTL, relearnIdle, maxFrameWait time.Duration, fixEnabled, injectCachedSPSPPS bool, logConfig ProxyLogConfig) *videoProxy {
 	ctx, cancel := context.WithCancel(context.Background())
 	if !fixEnabled {
 		injectCachedSPSPPS = false
 	}
+	logger := logging.WithSessionID(session.ID)
 	proxy := &videoProxy{
-		session:            session,
-		aConn:              aConn,
-		bConn:              bConn,
-		peerLearningWindow: peerLearningWindow,
-		maxFrameWait:       maxFrameWait,
-		statsInterval:      logConfig.StatsInterval,
-		packetLog:          logConfig.PacketLog,
-		packetLogSampleN:   logConfig.PacketLogSampleN,
-		packetLogOnAnomaly: logConfig.PacketLogOnAnomaly,
-		ctx:                ctx,
-		cancel:             cancel,
-		fixEnabled:         fixEnabled,
-		injectCachedSPSPPS: injectCachedSPSPPS,
-		logger:             logging.WithSessionID(session.ID),
+		session:             session,
+		aConn:               aConn,
+		bConn:               bConn,
+		peerLearningTracker: newPeerLearningTracker(minPackets, candidateTTL, relearnIdle, logger, session.ID, proxyDirectionAToB, "video"),
+		maxFrameWait:        maxFrameWait,
+		statsInterval:       logConfig.StatsInterval,
+		packetLog:           logConfig.PacketLog,
+		packetLogSampleN:    logConfig.PacketLogSampleN,
+		packetLogOnAnomaly:  logConfig.PacketLogOnAnomaly,
+		ctx:                 ctx,
+		cancel:              cancel,
+		fixEnabled:          fixEnabled,
+		injectCachedSPSPPS:  injectCachedSPSPPS,
+		logger:              logger,
 	}
 	proxy.writeToDest = func(packet []byte, dest *net.UDPAddr) error {
 		if bConn == nil {
@@ -195,7 +193,8 @@ func (p *videoProxy) loopAIn() {
 		if p.fixEnabled {
 			p.analyzeFrameBoundaries(buffer[:n])
 		}
-		if !p.updateDoorphonePeer(addr) {
+		suitableMedia := isSuitableVideoMediaPacket(buffer[:n])
+		if !p.updateDoorphonePeer(addr, suitableMedia) {
 			p.session.videoCounters.aToB.dropPeerUpdateRejected.Add(1)
 			continue
 		}
@@ -273,32 +272,18 @@ func (p *videoProxy) loopBIn() {
 	}
 }
 
-func (p *videoProxy) updateDoorphonePeer(addr *net.UDPAddr) bool {
-	if addr == nil {
+func (p *videoProxy) updateDoorphonePeer(addr *net.UDPAddr, suitable bool) bool {
+	if p.peerLearningTracker == nil {
 		return false
 	}
-	p.peerMu.Lock()
-	defer p.peerMu.Unlock()
-	now := time.Now()
-	if p.doorphonePeer == nil {
-		p.doorphonePeer = cloneUDPAddr(addr)
-		p.doorphoneLearnedAt = now
-		return true
-	}
-	if p.doorphonePeer.IP.Equal(addr.IP) && p.doorphonePeer.Port == addr.Port {
-		return true
-	}
-	if now.Sub(p.doorphoneLearnedAt) <= p.peerLearningWindow {
-		p.doorphonePeer = cloneUDPAddr(addr)
-		return true
-	}
-	return false
+	return p.peerLearningTracker.observe(addr, suitable, time.Now())
 }
 
 func (p *videoProxy) getDoorphonePeer() *net.UDPAddr {
-	p.peerMu.RLock()
-	defer p.peerMu.RUnlock()
-	return cloneUDPAddr(p.doorphonePeer)
+	if p.peerLearningTracker == nil {
+		return nil
+	}
+	return p.peerLearningTracker.learned()
 }
 
 func (p *videoProxy) logMissingDest() {
@@ -840,4 +825,9 @@ func setTimestamp(packet []byte, timestamp uint32) {
 		return
 	}
 	binary.BigEndian.PutUint32(packet[4:8], timestamp)
+}
+
+func isSuitableVideoMediaPacket(packet []byte) bool {
+	_, ok := parseH264Packet(packet)
+	return ok
 }

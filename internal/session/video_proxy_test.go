@@ -19,7 +19,7 @@ func TestVideoProxyRawModeForwardsPackets(t *testing.T) {
 	dest := localUDPAddr(rtpEngineConn)
 	session.videoDest.Store(dest)
 
-	proxy := newVideoProxy(session, aConn, bConn, 200*time.Millisecond, 50*time.Millisecond, false, true, ProxyLogConfig{})
+	proxy := newVideoProxy(session, aConn, bConn, 1, 4*time.Second, time.Second, 50*time.Millisecond, false, true, ProxyLogConfig{})
 	proxy.start()
 	defer proxy.stop()
 
@@ -80,7 +80,7 @@ func TestVideoProxyFixModeForcedFlush(t *testing.T) {
 
 	dest := localUDPAddr(rtpEngineConn)
 
-	proxy := newVideoProxy(session, aConn, bConn, 200*time.Millisecond, time.Millisecond, true, true, ProxyLogConfig{})
+	proxy := newVideoProxy(session, aConn, bConn, 1, 4*time.Second, time.Second, time.Millisecond, true, true, ProxyLogConfig{})
 
 	fuStart := makeRTPPacket(1, 9000, []byte{28, 0x85})
 	proxy.handleVideoPacket(fuStart, dest)

@@ -38,7 +38,9 @@ func main() {
 	}
 	manager := session.NewManager(
 		allocator,
-		time.Duration(cfg.PeerLearningWindowSec)*time.Second,
+		cfg.PeerLearningMinPackets,
+		time.Duration(cfg.PeerRelearnIdleMS)*time.Millisecond,
+		time.Duration(cfg.PeerLearningCandidateTTLMS)*time.Millisecond,
 		time.Duration(cfg.MaxFrameWaitMS)*time.Millisecond,
 		time.Duration(cfg.IdleTimeoutSec)*time.Second,
 		cfg.VideoInjectCachedSPSPPS,
