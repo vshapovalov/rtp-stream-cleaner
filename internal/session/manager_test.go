@@ -19,7 +19,9 @@ func newTestManager(t *testing.T, idleTimeout time.Duration) *Manager {
 	}
 	return newManagerWithDeps(
 		allocator,
-		0,
+		5,
+		time.Second,
+		4*time.Second,
 		0,
 		idleTimeout,
 		false,
@@ -28,10 +30,10 @@ func newTestManager(t *testing.T, idleTimeout time.Duration) *Manager {
 			startReaper: false,
 			now:         func() time.Time { return time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC) },
 			listenUDP:   func(string, *net.UDPAddr) (*net.UDPConn, error) { return nil, nil },
-			newAudioProxy: func(*Session, *net.UDPConn, *net.UDPConn, time.Duration, ProxyLogConfig) sessionProxy {
+			newAudioProxy: func(*Session, *net.UDPConn, *net.UDPConn, int, time.Duration, time.Duration, ProxyLogConfig) sessionProxy {
 				return &noopProxy{}
 			},
-			newVideoProxy: func(*Session, *net.UDPConn, *net.UDPConn, time.Duration, time.Duration, bool, bool, ProxyLogConfig) sessionProxy {
+			newVideoProxy: func(*Session, *net.UDPConn, *net.UDPConn, int, time.Duration, time.Duration, time.Duration, bool, bool, ProxyLogConfig) sessionProxy {
 				return &noopProxy{}
 			},
 		},

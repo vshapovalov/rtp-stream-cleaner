@@ -18,7 +18,9 @@ func TestLoad_FileWinsOverEnv(t *testing.T) {
 		"internal_ip": "10.10.0.5",
 		"rtp_port_min": 21000,
 		"rtp_port_max": 22000,
-		"peer_learning_window_sec": 17,
+		"peer_learning_min_packets": 7,
+		"peer_relearn_idle_ms": 1500,
+		"peer_learning_candidate_ttl_ms": 4500,
 		"max_frame_wait_ms": 240,
 		"idle_timeout_sec": 70,
 		"video_inject_cached_sps_pps": true,
@@ -34,22 +36,24 @@ func TestLoad_FileWinsOverEnv(t *testing.T) {
 	}
 
 	setAllEnv(t, map[string]string{
-		"API_LISTEN_ADDR":             "0.0.0.0:8081",
-		"SERVICE_PASSWORD":            "from-env-password",
-		"PUBLIC_IP":                   "203.0.113.50",
-		"INTERNAL_IP":                 "10.0.0.1",
-		"RTP_PORT_MIN":                "30000",
-		"RTP_PORT_MAX":                "40000",
-		"PEER_LEARNING_WINDOW_SEC":    "10",
-		"MAX_FRAME_WAIT_MS":           "120",
-		"IDLE_TIMEOUT_SEC":            "60",
-		"VIDEO_INJECT_CACHED_SPS_PPS": "false",
-		"STATS_LOG_INTERVAL_SEC":      "5",
-		"PACKET_LOG":                  "false",
-		"PACKET_LOG_SAMPLE_N":         "0",
-		"PACKET_LOG_ON_ANOMALY":       "true",
-		"LOG_LEVEL":                   "error",
-		"LOG_FORMAT":                  "json",
+		"API_LISTEN_ADDR":                "0.0.0.0:8081",
+		"SERVICE_PASSWORD":               "from-env-password",
+		"PUBLIC_IP":                      "203.0.113.50",
+		"INTERNAL_IP":                    "10.0.0.1",
+		"RTP_PORT_MIN":                   "30000",
+		"RTP_PORT_MAX":                   "40000",
+		"PEER_LEARNING_MIN_PACKETS":      "5",
+		"PEER_RELEARN_IDLE_MS":           "1000",
+		"PEER_LEARNING_CANDIDATE_TTL_MS": "4000",
+		"MAX_FRAME_WAIT_MS":              "120",
+		"IDLE_TIMEOUT_SEC":               "60",
+		"VIDEO_INJECT_CACHED_SPS_PPS":    "false",
+		"STATS_LOG_INTERVAL_SEC":         "5",
+		"PACKET_LOG":                     "false",
+		"PACKET_LOG_SAMPLE_N":            "0",
+		"PACKET_LOG_ON_ANOMALY":          "true",
+		"LOG_LEVEL":                      "error",
+		"LOG_FORMAT":                     "json",
 	})
 
 	cfg, err := Load()
@@ -63,7 +67,9 @@ func TestLoad_FileWinsOverEnv(t *testing.T) {
 		cfg.InternalIP != "10.10.0.5" ||
 		cfg.RTPPortMin != 21000 ||
 		cfg.RTPPortMax != 22000 ||
-		cfg.PeerLearningWindowSec != 17 ||
+		cfg.PeerLearningMinPackets != 7 ||
+		cfg.PeerRelearnIdleMS != 1500 ||
+		cfg.PeerLearningCandidateTTLMS != 4500 ||
 		cfg.MaxFrameWaitMS != 240 ||
 		cfg.IdleTimeoutSec != 70 ||
 		!cfg.VideoInjectCachedSPSPPS ||
@@ -82,22 +88,24 @@ func TestLoad_EnvFallbackWhenFileAbsent(t *testing.T) {
 	withExecutableDir(t, tempDir)
 
 	setAllEnv(t, map[string]string{
-		"API_LISTEN_ADDR":             "0.0.0.0:7070",
-		"SERVICE_PASSWORD":            "env-password",
-		"PUBLIC_IP":                   "203.0.113.42",
-		"INTERNAL_IP":                 "10.20.30.40",
-		"RTP_PORT_MIN":                "31000",
-		"RTP_PORT_MAX":                "32000",
-		"PEER_LEARNING_WINDOW_SEC":    "12",
-		"MAX_FRAME_WAIT_MS":           "180",
-		"IDLE_TIMEOUT_SEC":            "65",
-		"VIDEO_INJECT_CACHED_SPS_PPS": "true",
-		"STATS_LOG_INTERVAL_SEC":      "9",
-		"PACKET_LOG":                  "true",
-		"PACKET_LOG_SAMPLE_N":         "4",
-		"PACKET_LOG_ON_ANOMALY":       "false",
-		"LOG_LEVEL":                   "warn",
-		"LOG_FORMAT":                  "text",
+		"API_LISTEN_ADDR":                "0.0.0.0:7070",
+		"SERVICE_PASSWORD":               "env-password",
+		"PUBLIC_IP":                      "203.0.113.42",
+		"INTERNAL_IP":                    "10.20.30.40",
+		"RTP_PORT_MIN":                   "31000",
+		"RTP_PORT_MAX":                   "32000",
+		"PEER_LEARNING_MIN_PACKETS":      "6",
+		"PEER_RELEARN_IDLE_MS":           "1300",
+		"PEER_LEARNING_CANDIDATE_TTL_MS": "4200",
+		"MAX_FRAME_WAIT_MS":              "180",
+		"IDLE_TIMEOUT_SEC":               "65",
+		"VIDEO_INJECT_CACHED_SPS_PPS":    "true",
+		"STATS_LOG_INTERVAL_SEC":         "9",
+		"PACKET_LOG":                     "true",
+		"PACKET_LOG_SAMPLE_N":            "4",
+		"PACKET_LOG_ON_ANOMALY":          "false",
+		"LOG_LEVEL":                      "warn",
+		"LOG_FORMAT":                     "text",
 	})
 
 	cfg, err := Load()
@@ -111,7 +119,9 @@ func TestLoad_EnvFallbackWhenFileAbsent(t *testing.T) {
 		cfg.InternalIP != "10.20.30.40" ||
 		cfg.RTPPortMin != 31000 ||
 		cfg.RTPPortMax != 32000 ||
-		cfg.PeerLearningWindowSec != 12 ||
+		cfg.PeerLearningMinPackets != 6 ||
+		cfg.PeerRelearnIdleMS != 1300 ||
+		cfg.PeerLearningCandidateTTLMS != 4200 ||
 		cfg.MaxFrameWaitMS != 180 ||
 		cfg.IdleTimeoutSec != 65 ||
 		!cfg.VideoInjectCachedSPSPPS ||

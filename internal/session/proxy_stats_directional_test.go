@@ -6,6 +6,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSnapshotAudioDirectionalStatsSplitAndDropReasons(t *testing.T) {
@@ -107,7 +108,7 @@ func TestProxyStatsLogsUseDropsTotalInsteadOfAggregateDrops(t *testing.T) {
 		session.audioEnabled.Store(true)
 		session.audioCounters.aToB.pktsIn.Add(1)
 		session.audioCounters.aToB.dropDestNotSet.Add(1)
-		proxy := &audioProxy{session: session}
+		proxy := &audioProxy{session: session, peerLearningTracker: newPeerLearningTracker(1, time.Second, time.Second, nil, "log-audio", proxyDirectionAToB, "audio")}
 
 		buf := bytes.Buffer{}
 		proxy.logger = slog.New(slog.NewJSONHandler(&buf, nil))
@@ -124,7 +125,7 @@ func TestProxyStatsLogsUseDropsTotalInsteadOfAggregateDrops(t *testing.T) {
 		}
 
 		buf.Reset()
-		proxy.doorphonePeer = &net.UDPAddr{IP: net.ParseIP("10.0.0.5"), Port: 34567}
+		_ = proxy.peerLearningTracker.observe(&net.UDPAddr{IP: net.ParseIP("10.0.0.5"), Port: 34567}, true, time.Now())
 		proxy.logStats(false)
 		if !strings.Contains(buf.String(), "\"learned_peer\":\"10.0.0.5:34567\"") {
 			t.Fatalf("expected learned_peer with learned address in audio log: %s", buf.String())
@@ -136,7 +137,7 @@ func TestProxyStatsLogsUseDropsTotalInsteadOfAggregateDrops(t *testing.T) {
 		session.videoEnabled.Store(true)
 		session.videoCounters.aToB.pktsIn.Add(1)
 		session.videoCounters.aToB.dropDestNotSet.Add(1)
-		proxy := &videoProxy{session: session}
+		proxy := &videoProxy{session: session, peerLearningTracker: newPeerLearningTracker(1, time.Second, time.Second, nil, "log-video", proxyDirectionAToB, "video")}
 
 		buf := bytes.Buffer{}
 		proxy.logger = slog.New(slog.NewJSONHandler(&buf, nil))
@@ -153,7 +154,7 @@ func TestProxyStatsLogsUseDropsTotalInsteadOfAggregateDrops(t *testing.T) {
 		}
 
 		buf.Reset()
-		proxy.doorphonePeer = &net.UDPAddr{IP: net.ParseIP("10.0.0.6"), Port: 45678}
+		_ = proxy.peerLearningTracker.observe(&net.UDPAddr{IP: net.ParseIP("10.0.0.6"), Port: 45678}, true, time.Now())
 		proxy.logStats(false)
 		if !strings.Contains(buf.String(), "\"learned_peer\":\"10.0.0.6:45678\"") {
 			t.Fatalf("expected learned_peer with learned address in video log: %s", buf.String())
@@ -165,7 +166,7 @@ func TestProxySourcesLoggedOnlyOnFinal(t *testing.T) {
 	t.Run("audio", func(t *testing.T) {
 		session := &Session{ID: "audio-final-sources"}
 		session.audioEnabled.Store(true)
-		proxy := &audioProxy{session: session}
+		proxy := &audioProxy{session: session, peerLearningTracker: newPeerLearningTracker(1, time.Second, time.Second, nil, "log-audio", proxyDirectionAToB, "audio")}
 
 		proxy.aToBSources.observe(&net.UDPAddr{IP: net.ParseIP("10.0.0.10"), Port: 1000})
 		proxy.bToASources.observe(&net.UDPAddr{IP: net.ParseIP("10.0.0.11"), Port: 1001})
@@ -191,7 +192,7 @@ func TestProxySourcesLoggedOnlyOnFinal(t *testing.T) {
 	t.Run("video", func(t *testing.T) {
 		session := &Session{ID: "video-final-sources"}
 		session.videoEnabled.Store(true)
-		proxy := &videoProxy{session: session}
+		proxy := &videoProxy{session: session, peerLearningTracker: newPeerLearningTracker(1, time.Second, time.Second, nil, "log-video", proxyDirectionAToB, "video")}
 
 		proxy.aToBSources.observe(&net.UDPAddr{IP: net.ParseIP("10.0.0.20"), Port: 2000})
 		proxy.bToASources.observe(&net.UDPAddr{IP: net.ParseIP("10.0.0.21"), Port: 2001})

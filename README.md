@@ -35,7 +35,9 @@ If the file is absent, it falls back to environment variables.
 | `INTERNAL_IP` | _(optional)_ | Internal IP returned by the session API. If empty, `PUBLIC_IP` is used instead (so `PUBLIC_IP` must be set). |
 | `RTP_PORT_MIN` | `30000` | First port in allocator range. |
 | `RTP_PORT_MAX` | `40000` | Last port in allocator range. |
-| `PEER_LEARNING_WINDOW_SEC` | `10` | Time window to learn/re-learn doorphone peer on audio leg A. |
+| `PEER_LEARNING_MIN_PACKETS` | `5` | Number of suitable packets required to lock to a doorphone peer source. |
+| `PEER_RELEARN_IDLE_MS` | `1000` | Idle timeout without suitable packets from learned peer before returning to learning. |
+| `PEER_LEARNING_CANDIDATE_TTL_MS` | `4000` | TTL for per-source learning candidates while in learning state. |
 | `MAX_FRAME_WAIT_MS` | `120` | Max wait before forcing a video frame flush. |
 | `IDLE_TIMEOUT_SEC` | `60` | Auto-delete sessions after inactivity. |
 | `VIDEO_INJECT_CACHED_SPS_PPS` | `false` | Inject cached SPS/PPS before IDR frames when missing in stream. |

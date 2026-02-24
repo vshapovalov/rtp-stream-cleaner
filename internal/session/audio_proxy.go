@@ -48,7 +48,7 @@ type audioProxy struct {
 	session             *Session
 	aConn               *net.UDPConn
 	bConn               *net.UDPConn
-	peerLearningWindow  time.Duration
+	peerLearningTracker *peerLearningTracker
 	statsInterval       time.Duration
 	packetLog           bool
 	packetLogSampleN    uint64
@@ -57,28 +57,26 @@ type audioProxy struct {
 	ctx                 context.Context
 	cancel              context.CancelFunc
 	wg                  sync.WaitGroup
-	peerMu              sync.RWMutex
-	doorphonePeer       *net.UDPAddr
-	doorphoneLearnedAt  time.Time
 	lastMissingDestNsec atomic.Int64
 	aToBSources         proxySourceStats
 	bToASources         proxySourceStats
 }
 
-func newAudioProxy(session *Session, aConn, bConn *net.UDPConn, peerLearningWindow time.Duration, logConfig ProxyLogConfig) *audioProxy {
+func newAudioProxy(session *Session, aConn, bConn *net.UDPConn, minPackets int, candidateTTL, relearnIdle time.Duration, logConfig ProxyLogConfig) *audioProxy {
 	ctx, cancel := context.WithCancel(context.Background())
+	logger := logging.WithSessionID(session.ID)
 	return &audioProxy{
-		session:            session,
-		aConn:              aConn,
-		bConn:              bConn,
-		peerLearningWindow: peerLearningWindow,
-		statsInterval:      logConfig.StatsInterval,
-		packetLog:          logConfig.PacketLog,
-		packetLogSampleN:   logConfig.PacketLogSampleN,
-		packetLogOnAnomaly: logConfig.PacketLogOnAnomaly,
-		logger:             logging.WithSessionID(session.ID),
-		ctx:                ctx,
-		cancel:             cancel,
+		session:             session,
+		aConn:               aConn,
+		bConn:               bConn,
+		peerLearningTracker: newPeerLearningTracker(minPackets, candidateTTL, relearnIdle, logger, session.ID, proxyDirectionAToB, "audio"),
+		statsInterval:       logConfig.StatsInterval,
+		packetLog:           logConfig.PacketLog,
+		packetLogSampleN:    logConfig.PacketLogSampleN,
+		packetLogOnAnomaly:  logConfig.PacketLogOnAnomaly,
+		logger:              logger,
+		ctx:                 ctx,
+		cancel:              cancel,
 	}
 }
 
@@ -142,7 +140,8 @@ func (p *audioProxy) loopAIn() {
 			continue
 		}
 		p.logPacketIfNeeded(buffer[:n], n, "a->b", &packetCount, &lastSeq, &hasLastSeq)
-		if !p.updateDoorphonePeer(addr) {
+		headerValid := isValidRTPPacket(buffer[:n])
+		if !p.updateDoorphonePeer(addr, headerValid) {
 			p.session.audioCounters.aToB.dropPeerUpdateRejected.Add(1)
 			continue
 		}
@@ -218,32 +217,23 @@ func (p *audioProxy) loopBIn() {
 	}
 }
 
-func (p *audioProxy) updateDoorphonePeer(addr *net.UDPAddr) bool {
-	if addr == nil {
+func (p *audioProxy) updateDoorphonePeer(addr *net.UDPAddr, suitable bool) bool {
+	if p.peerLearningTracker == nil {
 		return false
 	}
-	p.peerMu.Lock()
-	defer p.peerMu.Unlock()
-	now := time.Now()
-	if p.doorphonePeer == nil {
-		p.doorphonePeer = cloneUDPAddr(addr)
-		p.doorphoneLearnedAt = now
-		return true
-	}
-	if p.doorphonePeer.IP.Equal(addr.IP) && p.doorphonePeer.Port == addr.Port {
-		return true
-	}
-	if now.Sub(p.doorphoneLearnedAt) <= p.peerLearningWindow {
-		p.doorphonePeer = cloneUDPAddr(addr)
-		return true
-	}
-	return false
+	return p.peerLearningTracker.observe(addr, suitable, time.Now())
 }
 
 func (p *audioProxy) getDoorphonePeer() *net.UDPAddr {
-	p.peerMu.RLock()
-	defer p.peerMu.RUnlock()
-	return cloneUDPAddr(p.doorphonePeer)
+	if p.peerLearningTracker == nil {
+		return nil
+	}
+	return p.peerLearningTracker.learned()
+}
+
+func isValidRTPPacket(packet []byte) bool {
+	_, ok := rtpfix.ParseRTPHeader(packet)
+	return ok
 }
 
 func (p *audioProxy) logMissingDest() {

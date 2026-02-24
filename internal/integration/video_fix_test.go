@@ -45,7 +45,7 @@ func videoFixEnv() map[string]string {
 	env := baseEnv("10")
 	env["PUBLIC_IP"] = "127.0.0.1"
 	env["INTERNAL_IP"] = "127.0.0.1"
-	env["PEER_LEARNING_WINDOW_SEC"] = "1"
+	env["PEER_LEARNING_MIN_PACKETS"] = "1"
 	env["MAX_FRAME_WAIT_MS"] = "150"
 	env["IDLE_TIMEOUT_SEC"] = "10"
 	env["RTP_PORT_MIN"] = "35000"
