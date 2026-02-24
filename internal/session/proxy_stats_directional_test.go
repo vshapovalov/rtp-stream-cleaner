@@ -3,6 +3,7 @@ package session
 import (
 	"bytes"
 	"log/slog"
+	"net"
 	"strings"
 	"testing"
 )
@@ -118,6 +119,16 @@ func TestProxyStatsLogsUseDropsTotalInsteadOfAggregateDrops(t *testing.T) {
 		if strings.Contains(logLine, "\"drops\":") {
 			t.Fatalf("unexpected legacy aggregate drops field in audio log: %s", logLine)
 		}
+		if !strings.Contains(logLine, "\"learned_peer\":\"none\"") {
+			t.Fatalf("expected learned_peer=none in audio log: %s", logLine)
+		}
+
+		buf.Reset()
+		proxy.doorphonePeer = &net.UDPAddr{IP: net.ParseIP("10.0.0.5"), Port: 34567}
+		proxy.logStats(false)
+		if !strings.Contains(buf.String(), "\"learned_peer\":\"10.0.0.5:34567\"") {
+			t.Fatalf("expected learned_peer with learned address in audio log: %s", buf.String())
+		}
 	})
 
 	t.Run("video", func(t *testing.T) {
@@ -136,6 +147,70 @@ func TestProxyStatsLogsUseDropsTotalInsteadOfAggregateDrops(t *testing.T) {
 		}
 		if strings.Contains(logLine, "\"drops\":") {
 			t.Fatalf("unexpected legacy aggregate drops field in video log: %s", logLine)
+		}
+		if !strings.Contains(logLine, "\"learned_peer\":\"none\"") {
+			t.Fatalf("expected learned_peer=none in video log: %s", logLine)
+		}
+
+		buf.Reset()
+		proxy.doorphonePeer = &net.UDPAddr{IP: net.ParseIP("10.0.0.6"), Port: 45678}
+		proxy.logStats(false)
+		if !strings.Contains(buf.String(), "\"learned_peer\":\"10.0.0.6:45678\"") {
+			t.Fatalf("expected learned_peer with learned address in video log: %s", buf.String())
+		}
+	})
+}
+
+func TestProxySourcesLoggedOnlyOnFinal(t *testing.T) {
+	t.Run("audio", func(t *testing.T) {
+		session := &Session{ID: "audio-final-sources"}
+		session.audioEnabled.Store(true)
+		proxy := &audioProxy{session: session}
+
+		proxy.aToBSources.observe(&net.UDPAddr{IP: net.ParseIP("10.0.0.10"), Port: 1000})
+		proxy.bToASources.observe(&net.UDPAddr{IP: net.ParseIP("10.0.0.11"), Port: 1001})
+
+		buf := bytes.Buffer{}
+		proxy.logger = slog.New(slog.NewJSONHandler(&buf, nil))
+		proxy.logStats(false)
+		if strings.Contains(buf.String(), "audio.proxy.sources") {
+			t.Fatalf("audio.proxy.sources should not be logged for non-final stats: %s", buf.String())
+		}
+
+		buf.Reset()
+		proxy.logStats(true)
+		logLine := buf.String()
+		if !strings.Contains(logLine, "audio.proxy.sources") {
+			t.Fatalf("expected audio.proxy.sources for final stats: %s", logLine)
+		}
+		if !strings.Contains(logLine, "10.0.0.10:1000=1") || !strings.Contains(logLine, "10.0.0.11:1001=1") {
+			t.Fatalf("expected source counts in audio final log: %s", logLine)
+		}
+	})
+
+	t.Run("video", func(t *testing.T) {
+		session := &Session{ID: "video-final-sources"}
+		session.videoEnabled.Store(true)
+		proxy := &videoProxy{session: session}
+
+		proxy.aToBSources.observe(&net.UDPAddr{IP: net.ParseIP("10.0.0.20"), Port: 2000})
+		proxy.bToASources.observe(&net.UDPAddr{IP: net.ParseIP("10.0.0.21"), Port: 2001})
+
+		buf := bytes.Buffer{}
+		proxy.logger = slog.New(slog.NewJSONHandler(&buf, nil))
+		proxy.logStats(false)
+		if strings.Contains(buf.String(), "video.proxy.sources") {
+			t.Fatalf("video.proxy.sources should not be logged for non-final stats: %s", buf.String())
+		}
+
+		buf.Reset()
+		proxy.logStats(true)
+		logLine := buf.String()
+		if !strings.Contains(logLine, "video.proxy.sources") {
+			t.Fatalf("expected video.proxy.sources for final stats: %s", logLine)
+		}
+		if !strings.Contains(logLine, "10.0.0.20:2000=1") || !strings.Contains(logLine, "10.0.0.21:2001=1") {
+			t.Fatalf("expected source counts in video final log: %s", logLine)
 		}
 	})
 }
