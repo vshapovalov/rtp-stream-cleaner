@@ -96,6 +96,8 @@ type videoProxy struct {
 	lastOutSeq          uint16
 	hasLastOutSeq       bool
 	writeToDest         func([]byte, *net.UDPAddr) error
+	aToBSources         proxySourceStats
+	bToASources         proxySourceStats
 }
 
 func newVideoProxy(session *Session, aConn, bConn *net.UDPConn, peerLearningWindow, maxFrameWait time.Duration, fixEnabled, injectCachedSPSPPS bool, logConfig ProxyLogConfig) *videoProxy {
@@ -181,6 +183,7 @@ func (p *videoProxy) loopAIn() {
 			continue
 		}
 		p.session.markActivity(time.Now())
+		p.aToBSources.observe(addr)
 		p.session.videoCounters.aToB.pktsIn.Add(1)
 		p.session.videoCounters.aToB.bytesIn.Add(uint64(n))
 		if !p.session.videoEnabled.Load() {
@@ -237,6 +240,7 @@ func (p *videoProxy) loopBIn() {
 			continue
 		}
 		p.session.markActivity(time.Now())
+		p.bToASources.observe(addr)
 		if !p.session.videoEnabled.Load() {
 			p.session.videoCounters.bToA.ignoredDisabled.Add(1)
 			continue
@@ -330,6 +334,10 @@ func (p *videoProxy) logStats(final bool) {
 		disabledReason = ""
 	}
 	for _, snapshot := range snapshots {
+		learnedPeer := "none"
+		if peer := p.getDoorphonePeer(); peer != nil {
+			learnedPeer = peer.String()
+		}
 		spsPpsInjected := snapshot.VideoInjectedSPS + snapshot.VideoInjectedPPS
 		args := []any{
 			"direction", snapshot.Direction,
@@ -344,6 +352,7 @@ func (p *videoProxy) logStats(final bool) {
 			"drop_peer_update_rejected", snapshot.DropPeerUpdateRejected,
 			"drop_write_error", snapshot.DropWriteError,
 			"ignored_disabled", snapshot.IgnoredDisabled,
+			"learned_peer", learnedPeer,
 			"enabled", enabled,
 			"disabled_reason", disabledReason,
 			"frames", snapshot.VideoFramesStarted,
@@ -362,6 +371,10 @@ func (p *videoProxy) logStats(final bool) {
 			args = append(args, "final", true)
 		}
 		p.logger.Info("video.proxy.stats", args...)
+	}
+	if final {
+		p.logger.Info("video.proxy.sources", "direction", proxyDirectionAToB, "sources", p.aToBSources.format())
+		p.logger.Info("video.proxy.sources", "direction", proxyDirectionBToA, "sources", p.bToASources.format())
 	}
 }
 

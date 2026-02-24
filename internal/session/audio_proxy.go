@@ -61,6 +61,8 @@ type audioProxy struct {
 	doorphonePeer       *net.UDPAddr
 	doorphoneLearnedAt  time.Time
 	lastMissingDestNsec atomic.Int64
+	aToBSources         proxySourceStats
+	bToASources         proxySourceStats
 }
 
 func newAudioProxy(session *Session, aConn, bConn *net.UDPConn, peerLearningWindow time.Duration, logConfig ProxyLogConfig) *audioProxy {
@@ -132,6 +134,7 @@ func (p *audioProxy) loopAIn() {
 			continue
 		}
 		p.session.markActivity(time.Now())
+		p.aToBSources.observe(addr)
 		p.session.audioCounters.aToB.pktsIn.Add(1)
 		p.session.audioCounters.aToB.bytesIn.Add(uint64(n))
 		if !p.session.audioEnabled.Load() {
@@ -183,6 +186,7 @@ func (p *audioProxy) loopBIn() {
 			continue
 		}
 		p.session.markActivity(time.Now())
+		p.bToASources.observe(addr)
 		if !p.session.audioEnabled.Load() {
 			p.session.audioCounters.bToA.ignoredDisabled.Add(1)
 			continue
@@ -275,6 +279,10 @@ func (p *audioProxy) logStats(final bool) {
 		disabledReason = ""
 	}
 	for _, snapshot := range snapshots {
+		learnedPeer := "none"
+		if peer := p.getDoorphonePeer(); peer != nil {
+			learnedPeer = peer.String()
+		}
 		args := []any{
 			"direction", snapshot.Direction,
 			"pkts_in", snapshot.PktsIn,
@@ -288,6 +296,7 @@ func (p *audioProxy) logStats(final bool) {
 			"drop_peer_update_rejected", snapshot.DropPeerUpdateRejected,
 			"drop_write_error", snapshot.DropWriteError,
 			"ignored_disabled", snapshot.IgnoredDisabled,
+			"learned_peer", learnedPeer,
 			"enabled", enabled,
 			"disabled_reason", disabledReason,
 		}
@@ -297,6 +306,10 @@ func (p *audioProxy) logStats(final bool) {
 		p.logger.Info("audio.proxy.stats",
 			args...,
 		)
+	}
+	if final {
+		p.logger.Info("audio.proxy.sources", "direction", proxyDirectionAToB, "sources", p.aToBSources.format())
+		p.logger.Info("audio.proxy.sources", "direction", proxyDirectionBToA, "sources", p.bToASources.format())
 	}
 }
 
