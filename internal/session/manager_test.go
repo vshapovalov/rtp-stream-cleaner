@@ -25,6 +25,9 @@ func newTestManager(t *testing.T, idleTimeout time.Duration) *Manager {
 		0,
 		idleTimeout,
 		false,
+		false,
+		8,
+		10*time.Millisecond,
 		ProxyLogConfig{},
 		managerDeps{
 			startReaper: false,
@@ -33,7 +36,7 @@ func newTestManager(t *testing.T, idleTimeout time.Duration) *Manager {
 			newAudioProxy: func(*Session, *net.UDPConn, *net.UDPConn, int, time.Duration, time.Duration, ProxyLogConfig) sessionProxy {
 				return &noopProxy{}
 			},
-			newVideoProxy: func(*Session, *net.UDPConn, *net.UDPConn, int, time.Duration, time.Duration, time.Duration, bool, bool, ProxyLogConfig) sessionProxy {
+			newVideoProxy: func(*Session, *net.UDPConn, *net.UDPConn, int, time.Duration, time.Duration, time.Duration, bool, bool, bool, int, time.Duration, ProxyLogConfig) sessionProxy {
 				return &noopProxy{}
 			},
 		},

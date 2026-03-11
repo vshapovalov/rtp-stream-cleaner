@@ -5,7 +5,9 @@ import (
 	"encoding/binary"
 	"net"
 	"testing"
+	"time"
 
+	"rtp-stream-cleaner/internal/logging"
 	"rtp-stream-cleaner/internal/rtpfix"
 )
 
@@ -87,5 +89,44 @@ func TestVideoProxyInjectCachedSPSPPSOnIDR(t *testing.T) {
 	}
 	if counters.VideoSeqDelta != 2 {
 		t.Fatalf("unexpected seq delta: got=%d want=2", counters.VideoSeqDelta)
+	}
+}
+
+func TestVideoProxyReorderWithInjectCachedSPSPPS(t *testing.T) {
+	session := &Session{ID: "S-inject-reorder"}
+	session.videoEnabled.Store(true)
+	session.videoDest.Store(&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9000})
+	proxy := &videoProxy{session: session, fixEnabled: true, injectCachedSPSPPS: true}
+	proxy.peerLearningTracker = newPeerLearningTracker(1, time.Second, time.Second, logging.WithSessionID(session.ID), session.ID, proxyDirectionAToB, "video")
+	proxy.videoReorder = newVideoReorderBuffer(8, 10*time.Millisecond, &session.videoCounters.aToB)
+
+	var output [][]byte
+	proxy.writeToDest = func(packet []byte, dest *net.UDPAddr) error {
+		clone := make([]byte, len(packet))
+		copy(clone, packet)
+		output = append(output, clone)
+		return nil
+	}
+
+	spsPacket := makeRTPPacket(10, 9000, []byte{0x67})
+	ppsPacket := makeRTPPacket(11, 9000, []byte{0x68})
+	idrPacket := makeRTPPacket(12, 9000, []byte{0x65})
+	spsInfo, _ := parseH264Packet(spsPacket)
+	ppsInfo, _ := parseH264Packet(ppsPacket)
+	proxy.cacheParameterSet(spsInfo.payload, true)
+	proxy.cacheParameterSet(ppsInfo.payload, false)
+
+	var packetCount uint64
+	var lastSeq uint16
+	var hasLastSeq bool
+	proxy.videoReorder.push(idrPacket, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 10000}, time.Now(), func(packet []byte, src *net.UDPAddr, fromBuffer bool) {
+		proxy.processAInPacket(packet, src, &packetCount, &lastSeq, &hasLastSeq, fromBuffer)
+	})
+
+	if len(output) != 3 {
+		t.Fatalf("expected 3 output packets, got %d", len(output))
+	}
+	if session.videoCounters.aToB.videoInjectedSPS.Load() != 1 || session.videoCounters.aToB.videoInjectedPPS.Load() != 1 {
+		t.Fatalf("expected injected counters to stay functional")
 	}
 }

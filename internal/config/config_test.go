@@ -24,6 +24,9 @@ func TestLoad_FileWinsOverEnv(t *testing.T) {
 		"max_frame_wait_ms": 240,
 		"idle_timeout_sec": 70,
 		"video_inject_cached_sps_pps": true,
+		"video_reorder_enabled": true,
+		"video_reorder_max_packets": 12,
+		"video_reorder_max_wait_ms": 15,
 		"stats_log_interval_sec": 8,
 		"packet_log": true,
 		"packet_log_sample_n": 13,
@@ -48,6 +51,9 @@ func TestLoad_FileWinsOverEnv(t *testing.T) {
 		"MAX_FRAME_WAIT_MS":              "120",
 		"IDLE_TIMEOUT_SEC":               "60",
 		"VIDEO_INJECT_CACHED_SPS_PPS":    "false",
+		"VIDEO_REORDER_ENABLED":          "false",
+		"VIDEO_REORDER_MAX_PACKETS":      "8",
+		"VIDEO_REORDER_MAX_WAIT_MS":      "10",
 		"STATS_LOG_INTERVAL_SEC":         "5",
 		"PACKET_LOG":                     "false",
 		"PACKET_LOG_SAMPLE_N":            "0",
@@ -73,6 +79,9 @@ func TestLoad_FileWinsOverEnv(t *testing.T) {
 		cfg.MaxFrameWaitMS != 240 ||
 		cfg.IdleTimeoutSec != 70 ||
 		!cfg.VideoInjectCachedSPSPPS ||
+		!cfg.VideoReorderEnabled ||
+		cfg.VideoReorderMaxPackets != 12 ||
+		cfg.VideoReorderMaxWaitMS != 15 ||
 		cfg.StatsLogIntervalSec != 8 ||
 		!cfg.PacketLog ||
 		cfg.PacketLogSampleN != 13 ||
@@ -100,6 +109,9 @@ func TestLoad_EnvFallbackWhenFileAbsent(t *testing.T) {
 		"MAX_FRAME_WAIT_MS":              "180",
 		"IDLE_TIMEOUT_SEC":               "65",
 		"VIDEO_INJECT_CACHED_SPS_PPS":    "true",
+		"VIDEO_REORDER_ENABLED":          "true",
+		"VIDEO_REORDER_MAX_PACKETS":      "6",
+		"VIDEO_REORDER_MAX_WAIT_MS":      "14",
 		"STATS_LOG_INTERVAL_SEC":         "9",
 		"PACKET_LOG":                     "true",
 		"PACKET_LOG_SAMPLE_N":            "4",
@@ -125,6 +137,9 @@ func TestLoad_EnvFallbackWhenFileAbsent(t *testing.T) {
 		cfg.MaxFrameWaitMS != 180 ||
 		cfg.IdleTimeoutSec != 65 ||
 		!cfg.VideoInjectCachedSPSPPS ||
+		!cfg.VideoReorderEnabled ||
+		cfg.VideoReorderMaxPackets != 6 ||
+		cfg.VideoReorderMaxWaitMS != 14 ||
 		cfg.StatsLogIntervalSec != 9 ||
 		!cfg.PacketLog ||
 		cfg.PacketLogSampleN != 4 ||

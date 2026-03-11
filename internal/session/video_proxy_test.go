@@ -19,7 +19,7 @@ func TestVideoProxyRawModeForwardsPackets(t *testing.T) {
 	dest := localUDPAddr(rtpEngineConn)
 	session.videoDest.Store(dest)
 
-	proxy := newVideoProxy(session, aConn, bConn, 1, 4*time.Second, time.Second, 50*time.Millisecond, false, true, ProxyLogConfig{})
+	proxy := newVideoProxy(session, aConn, bConn, 1, 4*time.Second, time.Second, 50*time.Millisecond, false, true, false, 8, 10*time.Millisecond, ProxyLogConfig{})
 	proxy.start()
 	defer proxy.stop()
 
@@ -80,7 +80,7 @@ func TestVideoProxyFixModeForcedFlush(t *testing.T) {
 
 	dest := localUDPAddr(rtpEngineConn)
 
-	proxy := newVideoProxy(session, aConn, bConn, 1, 4*time.Second, time.Second, time.Millisecond, true, true, ProxyLogConfig{})
+	proxy := newVideoProxy(session, aConn, bConn, 1, 4*time.Second, time.Second, time.Millisecond, true, true, false, 8, 10*time.Millisecond, ProxyLogConfig{})
 
 	fuStart := makeRTPPacket(1, 9000, []byte{28, 0x85})
 	proxy.handleVideoPacket(fuStart, dest)
@@ -122,4 +122,44 @@ func mustListenUDP(t *testing.T) *net.UDPConn {
 func localUDPAddr(conn *net.UDPConn) *net.UDPAddr {
 	addr := conn.LocalAddr().(*net.UDPAddr)
 	return &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: addr.Port}
+}
+
+func TestVideoProxyRawModeReorderReducesSeqGaps(t *testing.T) {
+	session := &Session{ID: "S-reorder"}
+	session.videoEnabled.Store(true)
+	aConn := mustListenUDP(t)
+	bConn := mustListenUDP(t)
+	rtpEngineConn := mustListenUDP(t)
+	defer rtpEngineConn.Close()
+
+	dest := localUDPAddr(rtpEngineConn)
+	session.videoDest.Store(dest)
+
+	proxy := newVideoProxy(session, aConn, bConn, 1, 4*time.Second, time.Second, 50*time.Millisecond, false, false, true, 8, 10*time.Millisecond, ProxyLogConfig{})
+	proxy.start()
+	defer proxy.stop()
+
+	doorphoneConn := mustListenUDP(t)
+	defer doorphoneConn.Close()
+	for _, seq := range []uint16{100, 102, 101, 103} {
+		packet := makeRTPPacket(seq, 9000, []byte{0x65})
+		if _, err := doorphoneConn.WriteToUDP(packet, localUDPAddr(aConn)); err != nil {
+			t.Fatalf("send to a-leg failed: %v", err)
+		}
+	}
+
+	buffer := make([]byte, 2048)
+	for i := 0; i < 4; i++ {
+		_ = rtpEngineConn.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
+		if _, _, err := rtpEngineConn.ReadFromUDP(buffer); err != nil {
+			t.Fatalf("read from rtpengine failed: %v", err)
+		}
+	}
+
+	if got := session.videoCounters.aToB.videoSeqGaps.Load(); got != 0 {
+		t.Fatalf("expected no seq gaps after reorder, got %d", got)
+	}
+	if got := session.videoCounters.aToB.videoReorderReleasedFromBuffer.Load(); got == 0 {
+		t.Fatalf("expected releases from reorder buffer")
+	}
 }

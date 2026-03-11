@@ -23,6 +23,9 @@ type Config struct {
 	MaxFrameWaitMS             int    `json:"max_frame_wait_ms"`
 	IdleTimeoutSec             int    `json:"idle_timeout_sec"`
 	VideoInjectCachedSPSPPS    bool   `json:"video_inject_cached_sps_pps"`
+	VideoReorderEnabled        bool   `json:"video_reorder_enabled"`
+	VideoReorderMaxPackets     int    `json:"video_reorder_max_packets"`
+	VideoReorderMaxWaitMS      int    `json:"video_reorder_max_wait_ms"`
 	StatsLogIntervalSec        int    `json:"stats_log_interval_sec"`
 	PacketLog                  bool   `json:"packet_log"`
 	PacketLogSampleN           int    `json:"packet_log_sample_n"`
@@ -91,6 +94,9 @@ func loadFromEnv() Config {
 		MaxFrameWaitMS:             getEnvInt("MAX_FRAME_WAIT_MS", 120),
 		IdleTimeoutSec:             getEnvInt("IDLE_TIMEOUT_SEC", 60),
 		VideoInjectCachedSPSPPS:    getEnvBool("VIDEO_INJECT_CACHED_SPS_PPS", false),
+		VideoReorderEnabled:        getEnvBool("VIDEO_REORDER_ENABLED", false),
+		VideoReorderMaxPackets:     getEnvInt("VIDEO_REORDER_MAX_PACKETS", 8),
+		VideoReorderMaxWaitMS:      getEnvInt("VIDEO_REORDER_MAX_WAIT_MS", 10),
 		StatsLogIntervalSec:        getEnvInt("STATS_LOG_INTERVAL_SEC", 5),
 		PacketLog:                  packetLog,
 		PacketLogSampleN:           getEnvInt("PACKET_LOG_SAMPLE_N", 0),

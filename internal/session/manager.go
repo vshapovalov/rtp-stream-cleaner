@@ -56,11 +56,14 @@ type Manager struct {
 	maxFrameWait             time.Duration
 	idleTimeout              time.Duration
 	videoInjectCachedSPSPPS  bool
+	videoReorderEnabled      bool
+	videoReorderMaxPackets   int
+	videoReorderMaxWait      time.Duration
 	proxyLogConfig           ProxyLogConfig
 	now                      func() time.Time
 	listenUDP                func(network string, laddr *net.UDPAddr) (*net.UDPConn, error)
 	newAudioProxy            func(session *Session, aConn, bConn *net.UDPConn, minPackets int, candidateTTL, relearnIdle time.Duration, logConfig ProxyLogConfig) sessionProxy
-	newVideoProxy            func(session *Session, aConn, bConn *net.UDPConn, minPackets int, candidateTTL, relearnIdle, maxFrameWait time.Duration, videoFix bool, inject bool, logConfig ProxyLogConfig) sessionProxy
+	newVideoProxy            func(session *Session, aConn, bConn *net.UDPConn, minPackets int, candidateTTL, relearnIdle, maxFrameWait time.Duration, videoFix bool, inject bool, reorderEnabled bool, reorderMaxPackets int, reorderMaxWait time.Duration, logConfig ProxyLogConfig) sessionProxy
 	stopCh                   chan struct{}
 	stopOnce                 sync.Once
 	wg                       sync.WaitGroup
@@ -75,7 +78,7 @@ type managerDeps struct {
 	now           func() time.Time
 	listenUDP     func(network string, laddr *net.UDPAddr) (*net.UDPConn, error)
 	newAudioProxy func(session *Session, aConn, bConn *net.UDPConn, minPackets int, candidateTTL, relearnIdle time.Duration, logConfig ProxyLogConfig) sessionProxy
-	newVideoProxy func(session *Session, aConn, bConn *net.UDPConn, minPackets int, candidateTTL, relearnIdle, maxFrameWait time.Duration, videoFix bool, inject bool, logConfig ProxyLogConfig) sessionProxy
+	newVideoProxy func(session *Session, aConn, bConn *net.UDPConn, minPackets int, candidateTTL, relearnIdle, maxFrameWait time.Duration, videoFix bool, inject bool, reorderEnabled bool, reorderMaxPackets int, reorderMaxWait time.Duration, logConfig ProxyLogConfig) sessionProxy
 	startReaper   bool
 }
 
@@ -86,11 +89,11 @@ type ProxyLogConfig struct {
 	PacketLogOnAnomaly bool
 }
 
-func NewManager(allocator *PortAllocator, peerLearningMinPackets int, peerRelearnIdle, peerLearningCandidateTTL, maxFrameWait, idleTimeout time.Duration, videoInjectCachedSPSPPS bool, logConfig ProxyLogConfig) *Manager {
-	return newManagerWithDeps(allocator, peerLearningMinPackets, peerRelearnIdle, peerLearningCandidateTTL, maxFrameWait, idleTimeout, videoInjectCachedSPSPPS, logConfig, managerDeps{startReaper: true})
+func NewManager(allocator *PortAllocator, peerLearningMinPackets int, peerRelearnIdle, peerLearningCandidateTTL, maxFrameWait, idleTimeout time.Duration, videoInjectCachedSPSPPS, videoReorderEnabled bool, videoReorderMaxPackets int, videoReorderMaxWait time.Duration, logConfig ProxyLogConfig) *Manager {
+	return newManagerWithDeps(allocator, peerLearningMinPackets, peerRelearnIdle, peerLearningCandidateTTL, maxFrameWait, idleTimeout, videoInjectCachedSPSPPS, videoReorderEnabled, videoReorderMaxPackets, videoReorderMaxWait, logConfig, managerDeps{startReaper: true})
 }
 
-func newManagerWithDeps(allocator *PortAllocator, peerLearningMinPackets int, peerRelearnIdle, peerLearningCandidateTTL, maxFrameWait, idleTimeout time.Duration, videoInjectCachedSPSPPS bool, logConfig ProxyLogConfig, deps managerDeps) *Manager {
+func newManagerWithDeps(allocator *PortAllocator, peerLearningMinPackets int, peerRelearnIdle, peerLearningCandidateTTL, maxFrameWait, idleTimeout time.Duration, videoInjectCachedSPSPPS, videoReorderEnabled bool, videoReorderMaxPackets int, videoReorderMaxWait time.Duration, logConfig ProxyLogConfig, deps managerDeps) *Manager {
 	if deps.now == nil {
 		deps.now = time.Now
 	}
@@ -103,8 +106,8 @@ func newManagerWithDeps(allocator *PortAllocator, peerLearningMinPackets int, pe
 		}
 	}
 	if deps.newVideoProxy == nil {
-		deps.newVideoProxy = func(session *Session, aConn, bConn *net.UDPConn, minPackets int, candidateTTL, relearnIdle, maxFrameWait time.Duration, videoFix bool, inject bool, logConfig ProxyLogConfig) sessionProxy {
-			return newVideoProxy(session, aConn, bConn, minPackets, candidateTTL, relearnIdle, maxFrameWait, videoFix, inject, logConfig)
+		deps.newVideoProxy = func(session *Session, aConn, bConn *net.UDPConn, minPackets int, candidateTTL, relearnIdle, maxFrameWait time.Duration, videoFix bool, inject bool, reorderEnabled bool, reorderMaxPackets int, reorderMaxWait time.Duration, logConfig ProxyLogConfig) sessionProxy {
+			return newVideoProxy(session, aConn, bConn, minPackets, candidateTTL, relearnIdle, maxFrameWait, videoFix, inject, reorderEnabled, reorderMaxPackets, reorderMaxWait, logConfig)
 		}
 	}
 	manager := &Manager{
@@ -116,6 +119,9 @@ func newManagerWithDeps(allocator *PortAllocator, peerLearningMinPackets int, pe
 		maxFrameWait:             maxFrameWait,
 		idleTimeout:              idleTimeout,
 		videoInjectCachedSPSPPS:  videoInjectCachedSPSPPS,
+		videoReorderEnabled:      videoReorderEnabled,
+		videoReorderMaxPackets:   videoReorderMaxPackets,
+		videoReorderMaxWait:      videoReorderMaxWait,
 		proxyLogConfig:           logConfig,
 		now:                      deps.now,
 		listenUDP:                deps.listenUDP,
@@ -215,7 +221,7 @@ func (m *Manager) createWithDest(callID, fromTag, toTag string, videoFix bool, i
 		return nil, fmt.Errorf("video b socket: %w", err)
 	}
 	session.audioProxy = m.newAudioProxy(session, aConn, bConn, m.peerLearningMinPackets, m.peerLearningCandidateTTL, m.peerRelearnIdle, m.proxyLogConfig)
-	session.videoProxy = m.newVideoProxy(session, videoAConn, videoBConn, m.peerLearningMinPackets, m.peerLearningCandidateTTL, m.peerRelearnIdle, m.maxFrameWait, videoFix, m.videoInjectCachedSPSPPS, m.proxyLogConfig)
+	session.videoProxy = m.newVideoProxy(session, videoAConn, videoBConn, m.peerLearningMinPackets, m.peerLearningCandidateTTL, m.peerRelearnIdle, m.maxFrameWait, videoFix, m.videoInjectCachedSPSPPS, m.videoReorderEnabled, m.videoReorderMaxPackets, m.videoReorderMaxWait, m.proxyLogConfig)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
