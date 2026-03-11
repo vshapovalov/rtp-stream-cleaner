@@ -20,26 +20,35 @@ type videoCounters struct {
 }
 
 type videoDirectionCounters struct {
-	pktsIn                 atomic.Uint64
-	pktsOut                atomic.Uint64
-	bytesIn                atomic.Uint64
-	bytesOut               atomic.Uint64
-	videoFramesStarted     atomic.Uint64
-	videoFramesEnded       atomic.Uint64
-	videoFramesFlushed     atomic.Uint64
-	videoForcedFlushes     atomic.Uint64
-	videoInjectedSPS       atomic.Uint64
-	videoInjectedPPS       atomic.Uint64
-	videoSeqDelta          atomic.Uint64
-	videoKeyframes         atomic.Uint64
-	videoNalParseErrors    atomic.Uint64
-	videoSeqGaps           atomic.Uint64
-	ignoredDisabled        atomic.Uint64
-	dropDestNotSet         atomic.Uint64
-	dropDestIPMismatch     atomic.Uint64
-	dropPeerNotLearned     atomic.Uint64
-	dropPeerUpdateRejected atomic.Uint64
-	dropWriteError         atomic.Uint64
+	pktsIn                         atomic.Uint64
+	pktsOut                        atomic.Uint64
+	bytesIn                        atomic.Uint64
+	bytesOut                       atomic.Uint64
+	videoFramesStarted             atomic.Uint64
+	videoFramesEnded               atomic.Uint64
+	videoFramesFlushed             atomic.Uint64
+	videoForcedFlushes             atomic.Uint64
+	videoInjectedSPS               atomic.Uint64
+	videoInjectedPPS               atomic.Uint64
+	videoSeqDelta                  atomic.Uint64
+	videoKeyframes                 atomic.Uint64
+	videoNalParseErrors            atomic.Uint64
+	videoSeqGaps                   atomic.Uint64
+	videoReorderBuffered           atomic.Uint64
+	videoReorderReleasedFromBuffer atomic.Uint64
+	videoReorderDuplicates         atomic.Uint64
+	videoReorderLateDrops          atomic.Uint64
+	videoReorderForcedSkips        atomic.Uint64
+	videoReorderHeldTooLong        atomic.Uint64
+	videoReorderOutOfWindow        atomic.Uint64
+	videoReorderInOrderFastPath    atomic.Uint64
+	videoReorderMaxDepth           atomic.Uint64
+	ignoredDisabled                atomic.Uint64
+	dropDestNotSet                 atomic.Uint64
+	dropDestIPMismatch             atomic.Uint64
+	dropPeerNotLearned             atomic.Uint64
+	dropPeerUpdateRejected         atomic.Uint64
+	dropWriteError                 atomic.Uint64
 }
 
 type VideoCounters struct {
@@ -89,6 +98,7 @@ type videoProxy struct {
 	cachedSPS           []byte
 	cachedPPS           []byte
 	injectCachedSPSPPS  bool
+	videoReorder        *videoReorderBuffer
 	seqDelta            uint16
 	lastOutSeq          uint16
 	hasLastOutSeq       bool
@@ -97,7 +107,7 @@ type videoProxy struct {
 	bToASources         proxySourceStats
 }
 
-func newVideoProxy(session *Session, aConn, bConn *net.UDPConn, minPackets int, candidateTTL, relearnIdle, maxFrameWait time.Duration, fixEnabled, injectCachedSPSPPS bool, logConfig ProxyLogConfig) *videoProxy {
+func newVideoProxy(session *Session, aConn, bConn *net.UDPConn, minPackets int, candidateTTL, relearnIdle, maxFrameWait time.Duration, fixEnabled, injectCachedSPSPPS bool, reorderEnabled bool, reorderMaxPackets int, reorderMaxWait time.Duration, logConfig ProxyLogConfig) *videoProxy {
 	ctx, cancel := context.WithCancel(context.Background())
 	if !fixEnabled {
 		injectCachedSPSPPS = false
@@ -119,6 +129,10 @@ func newVideoProxy(session *Session, aConn, bConn *net.UDPConn, minPackets int, 
 		injectCachedSPSPPS:  injectCachedSPSPPS,
 		logger:              logger,
 	}
+	if reorderEnabled {
+		proxy.videoReorder = newVideoReorderBuffer(reorderMaxPackets, reorderMaxWait, &session.videoCounters.aToB)
+	}
+
 	proxy.writeToDest = func(packet []byte, dest *net.UDPAddr) error {
 		if bConn == nil {
 			return errors.New("video b conn is nil")
@@ -168,19 +182,29 @@ func (p *videoProxy) loopAIn() {
 			return
 		default:
 		}
-		_ = p.aConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		readDeadline := 500 * time.Millisecond
+		if p.videoReorder != nil {
+			readDeadline = p.videoReorder.readPollInterval()
+		}
+		_ = p.aConn.SetReadDeadline(time.Now().Add(readDeadline))
 		n, addr, err := p.aConn.ReadFromUDP(buffer)
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
 				return
 			}
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				if p.videoReorder != nil {
+					p.videoReorder.releaseExpired(time.Now(), func(packet []byte, src *net.UDPAddr, releasedFromBuffer bool) {
+						p.processAInPacket(packet, src, &packetCount, &lastSeq, &hasLastSeq, releasedFromBuffer)
+					})
+				}
 				continue
 			}
 			p.logger.Error("video a leg read failed", "error", err)
 			continue
 		}
-		p.session.markActivity(time.Now())
+		now := time.Now()
+		p.session.markActivity(now)
 		p.aToBSources.observe(addr)
 		p.session.videoCounters.aToB.pktsIn.Add(1)
 		p.session.videoCounters.aToB.bytesIn.Add(uint64(n))
@@ -188,31 +212,46 @@ func (p *videoProxy) loopAIn() {
 			p.session.videoCounters.aToB.ignoredDisabled.Add(1)
 			continue
 		}
-		header, headerOK, seqGap := p.trackSeqGap(buffer[:n], &lastSeq, &hasLastSeq, &p.session.videoCounters.aToB)
-		p.logPacketIfNeeded("a->b", header, headerOK, seqGap, n, &packetCount)
-		if p.fixEnabled {
-			p.analyzeFrameBoundaries(buffer[:n])
-		}
-		suitableMedia := isSuitableVideoMediaPacket(buffer[:n])
-		if !p.updateDoorphonePeer(addr, suitableMedia) {
-			p.session.videoCounters.aToB.dropPeerUpdateRejected.Add(1)
+		if p.videoReorder == nil {
+			p.processAInPacket(buffer[:n], addr, &packetCount, &lastSeq, &hasLastSeq, false)
 			continue
 		}
-		dest := p.session.videoDest.Load()
-		if dest == nil {
-			if p.fixEnabled {
-				p.resetFrameBuffer()
-			}
-			p.logMissingDest()
-			p.session.videoCounters.aToB.dropDestNotSet.Add(1)
-			continue
-		}
-		if p.fixEnabled {
-			p.handleVideoPacket(buffer[:n], dest)
-			continue
-		}
-		p.forwardRawPacket(buffer[:n], dest)
+		p.videoReorder.push(buffer[:n], addr, now, func(packet []byte, src *net.UDPAddr, releasedFromBuffer bool) {
+			p.processAInPacket(packet, src, &packetCount, &lastSeq, &hasLastSeq, releasedFromBuffer)
+		})
 	}
+}
+
+func (p *videoProxy) processAInPacket(packet []byte, addr *net.UDPAddr, packetCount *uint64, lastSeq *uint16, hasLastSeq *bool, releasedFromBuffer bool) {
+	header, headerOK, seqGap := p.trackSeqGap(packet, lastSeq, hasLastSeq, &p.session.videoCounters.aToB)
+	p.logPacketIfNeeded("a->b", header, headerOK, seqGap, len(packet), packetCount)
+	if releasedFromBuffer {
+		p.session.videoCounters.aToB.videoReorderReleasedFromBuffer.Add(1)
+	} else if headerOK && p.videoReorder != nil {
+		p.session.videoCounters.aToB.videoReorderInOrderFastPath.Add(1)
+	}
+	if p.fixEnabled {
+		p.analyzeFrameBoundaries(packet)
+	}
+	suitableMedia := isSuitableVideoMediaPacket(packet)
+	if !p.updateDoorphonePeer(addr, suitableMedia) {
+		p.session.videoCounters.aToB.dropPeerUpdateRejected.Add(1)
+		return
+	}
+	dest := p.session.videoDest.Load()
+	if dest == nil {
+		if p.fixEnabled {
+			p.resetFrameBuffer()
+		}
+		p.logMissingDest()
+		p.session.videoCounters.aToB.dropDestNotSet.Add(1)
+		return
+	}
+	if p.fixEnabled {
+		p.handleVideoPacket(packet, dest)
+		return
+	}
+	p.forwardRawPacket(packet, dest)
 }
 
 func (p *videoProxy) loopBIn() {
@@ -348,6 +387,15 @@ func (p *videoProxy) logStats(final bool) {
 			"forced_flushes", snapshot.VideoForcedFlushes,
 			"nal_parse_errors", snapshot.VideoNalParseErrors,
 			"seq_gaps", snapshot.VideoSeqGaps,
+			"reorder_buffered", snapshot.VideoReorderBuffered,
+			"reorder_released_from_buffer", snapshot.VideoReorderReleasedFromBuffer,
+			"reorder_duplicates", snapshot.VideoReorderDuplicates,
+			"reorder_late_drops", snapshot.VideoReorderLateDrops,
+			"reorder_forced_skips", snapshot.VideoReorderForcedSkips,
+			"reorder_held_too_long", snapshot.VideoReorderHeldTooLong,
+			"reorder_out_of_window", snapshot.VideoReorderOutOfWindow,
+			"reorder_in_order_fast_path", snapshot.VideoReorderInOrderFastPath,
+			"reorder_max_depth", snapshot.VideoReorderMaxDepth,
 			"frames_ended", snapshot.VideoFramesEnded,
 			"frames_flushed", snapshot.VideoFramesFlushed,
 			"seq_delta_current", snapshot.VideoSeqDelta,
@@ -706,28 +754,37 @@ func (p *videoProxy) trackSeqGap(packet []byte, lastSeq *uint16, hasLastSeq *boo
 }
 
 type videoDirectionalStats struct {
-	Direction              string
-	PktsIn                 uint64
-	PktsOut                uint64
-	BytesIn                uint64
-	BytesOut               uint64
-	VideoFramesStarted     uint64
-	VideoFramesEnded       uint64
-	VideoFramesFlushed     uint64
-	VideoForcedFlushes     uint64
-	VideoInjectedSPS       uint64
-	VideoInjectedPPS       uint64
-	VideoSeqDelta          uint64
-	VideoKeyframes         uint64
-	VideoNalParseErrors    uint64
-	VideoSeqGaps           uint64
-	IgnoredDisabled        uint64
-	DropsTotal             uint64
-	DropDestNotSet         uint64
-	DropDestIPMismatch     uint64
-	DropPeerNotLearned     uint64
-	DropPeerUpdateRejected uint64
-	DropWriteError         uint64
+	Direction                      string
+	PktsIn                         uint64
+	PktsOut                        uint64
+	BytesIn                        uint64
+	BytesOut                       uint64
+	VideoFramesStarted             uint64
+	VideoFramesEnded               uint64
+	VideoFramesFlushed             uint64
+	VideoForcedFlushes             uint64
+	VideoInjectedSPS               uint64
+	VideoInjectedPPS               uint64
+	VideoSeqDelta                  uint64
+	VideoKeyframes                 uint64
+	VideoNalParseErrors            uint64
+	VideoSeqGaps                   uint64
+	VideoReorderBuffered           uint64
+	VideoReorderReleasedFromBuffer uint64
+	VideoReorderDuplicates         uint64
+	VideoReorderLateDrops          uint64
+	VideoReorderForcedSkips        uint64
+	VideoReorderHeldTooLong        uint64
+	VideoReorderOutOfWindow        uint64
+	VideoReorderInOrderFastPath    uint64
+	VideoReorderMaxDepth           uint64
+	IgnoredDisabled                uint64
+	DropsTotal                     uint64
+	DropDestNotSet                 uint64
+	DropDestIPMismatch             uint64
+	DropPeerNotLearned             uint64
+	DropPeerUpdateRejected         uint64
+	DropWriteError                 uint64
 }
 
 func snapshotVideoDirectionalStats(counters *videoCounters) []videoDirectionalStats {
@@ -744,27 +801,36 @@ func snapshotVideoDirection(direction string, counters *videoDirectionCounters) 
 		return videoDirectionalStats{Direction: direction}
 	}
 	snapshot := videoDirectionalStats{
-		Direction:              direction,
-		PktsIn:                 counters.pktsIn.Load(),
-		PktsOut:                counters.pktsOut.Load(),
-		BytesIn:                counters.bytesIn.Load(),
-		BytesOut:               counters.bytesOut.Load(),
-		VideoFramesStarted:     counters.videoFramesStarted.Load(),
-		VideoFramesEnded:       counters.videoFramesEnded.Load(),
-		VideoFramesFlushed:     counters.videoFramesFlushed.Load(),
-		VideoForcedFlushes:     counters.videoForcedFlushes.Load(),
-		VideoInjectedSPS:       counters.videoInjectedSPS.Load(),
-		VideoInjectedPPS:       counters.videoInjectedPPS.Load(),
-		VideoSeqDelta:          counters.videoSeqDelta.Load(),
-		VideoKeyframes:         counters.videoKeyframes.Load(),
-		VideoNalParseErrors:    counters.videoNalParseErrors.Load(),
-		VideoSeqGaps:           counters.videoSeqGaps.Load(),
-		IgnoredDisabled:        counters.ignoredDisabled.Load(),
-		DropDestNotSet:         counters.dropDestNotSet.Load(),
-		DropDestIPMismatch:     counters.dropDestIPMismatch.Load(),
-		DropPeerNotLearned:     counters.dropPeerNotLearned.Load(),
-		DropPeerUpdateRejected: counters.dropPeerUpdateRejected.Load(),
-		DropWriteError:         counters.dropWriteError.Load(),
+		Direction:                      direction,
+		PktsIn:                         counters.pktsIn.Load(),
+		PktsOut:                        counters.pktsOut.Load(),
+		BytesIn:                        counters.bytesIn.Load(),
+		BytesOut:                       counters.bytesOut.Load(),
+		VideoFramesStarted:             counters.videoFramesStarted.Load(),
+		VideoFramesEnded:               counters.videoFramesEnded.Load(),
+		VideoFramesFlushed:             counters.videoFramesFlushed.Load(),
+		VideoForcedFlushes:             counters.videoForcedFlushes.Load(),
+		VideoInjectedSPS:               counters.videoInjectedSPS.Load(),
+		VideoInjectedPPS:               counters.videoInjectedPPS.Load(),
+		VideoSeqDelta:                  counters.videoSeqDelta.Load(),
+		VideoKeyframes:                 counters.videoKeyframes.Load(),
+		VideoNalParseErrors:            counters.videoNalParseErrors.Load(),
+		VideoSeqGaps:                   counters.videoSeqGaps.Load(),
+		VideoReorderBuffered:           counters.videoReorderBuffered.Load(),
+		VideoReorderReleasedFromBuffer: counters.videoReorderReleasedFromBuffer.Load(),
+		VideoReorderDuplicates:         counters.videoReorderDuplicates.Load(),
+		VideoReorderLateDrops:          counters.videoReorderLateDrops.Load(),
+		VideoReorderForcedSkips:        counters.videoReorderForcedSkips.Load(),
+		VideoReorderHeldTooLong:        counters.videoReorderHeldTooLong.Load(),
+		VideoReorderOutOfWindow:        counters.videoReorderOutOfWindow.Load(),
+		VideoReorderInOrderFastPath:    counters.videoReorderInOrderFastPath.Load(),
+		VideoReorderMaxDepth:           counters.videoReorderMaxDepth.Load(),
+		IgnoredDisabled:                counters.ignoredDisabled.Load(),
+		DropDestNotSet:                 counters.dropDestNotSet.Load(),
+		DropDestIPMismatch:             counters.dropDestIPMismatch.Load(),
+		DropPeerNotLearned:             counters.dropPeerNotLearned.Load(),
+		DropPeerUpdateRejected:         counters.dropPeerUpdateRejected.Load(),
+		DropWriteError:                 counters.dropWriteError.Load(),
 	}
 	snapshot.DropsTotal = snapshot.DropDestNotSet + snapshot.DropDestIPMismatch + snapshot.DropPeerNotLearned + snapshot.DropPeerUpdateRejected + snapshot.DropWriteError
 	return snapshot

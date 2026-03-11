@@ -42,6 +42,9 @@ If the file is absent, it falls back to environment variables.
 | `MAX_FRAME_WAIT_MS` | `120` | Max wait before forcing a video frame flush. |
 | `IDLE_TIMEOUT_SEC` | `60` | Auto-delete sessions after inactivity. |
 | `VIDEO_INJECT_CACHED_SPS_PPS` | `false` | Inject cached SPS/PPS before IDR frames when missing in stream. |
+| `VIDEO_REORDER_ENABLED` | `false` | Enable A->B RTP video packet reordering before seq-gap tracking and frame assembly. |
+| `VIDEO_REORDER_MAX_PACKETS` | `8` | Reorder window size (number of packets buffered ahead of expected sequence). |
+| `VIDEO_REORDER_MAX_WAIT_MS` | `10` | Max wait for a missing packet before forced skip/release. |
 | `STATS_LOG_INTERVAL_SEC` | `5` | Interval for per-session proxy stats logs. |
 | `PACKET_LOG` | `false` | Enable debug packet logging. |
 | `PACKET_LOG_SAMPLE_N` | `0` | Log every Nth packet when packet logging is enabled (`0` disables sampling). |
@@ -185,3 +188,11 @@ List RTP sources in a PCAP file (SSRC, payload type, packet count):
   --send-pcap testdata/doorphone_broken_av.pcap \
   --list-sources
 ```
+
+## Video RTP reordering
+
+When enabled, video reordering is applied only on A->B video traffic and runs before `seq_gaps` tracking, frame-boundary analysis, and H264 fix/forwarding logic.
+
+It helps with short out-of-order bursts (for example FU-A reordering), reducing false `seq_gaps`, parser errors caused by packet order, and downstream NACK/PLI pressure.
+
+It does **not** recover true packet loss; missing packets are eventually forced-skipped after timeout/window pressure.

@@ -44,6 +44,9 @@ func main() {
 		time.Duration(cfg.MaxFrameWaitMS)*time.Millisecond,
 		time.Duration(cfg.IdleTimeoutSec)*time.Second,
 		cfg.VideoInjectCachedSPSPPS,
+		cfg.VideoReorderEnabled,
+		cfg.VideoReorderMaxPackets,
+		time.Duration(cfg.VideoReorderMaxWaitMS)*time.Millisecond,
 		session.ProxyLogConfig{
 			StatsInterval:      time.Duration(cfg.StatsLogIntervalSec) * time.Second,
 			PacketLog:          cfg.PacketLog,
