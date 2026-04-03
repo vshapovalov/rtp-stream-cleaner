@@ -104,6 +104,84 @@ func TestRTPPeerSendReceiveFromPCAP(t *testing.T) {
 	assertSourceCounts(t, expected, actual)
 }
 
+func TestRTPPeerSendReceiveFromPCAPIPv6(t *testing.T) {
+	rootDir := repoRoot(t)
+	binaryPath := filepath.Join(t.TempDir(), "rtppeer")
+	buildBinary(t, rootDir, binaryPath)
+
+	audioSSRC := uint32(0xedcc15a7)
+	videoSSRC := uint32(0x259989ef)
+	expected := runListSources(t, rootDir, binaryPath, filepath.Join(rootDir, "testdata", "normal.pcap"))
+	expected = filterSources(expected, map[uint32]struct{}{
+		audioSSRC: {},
+		videoSSRC: {},
+	})
+	if len(expected) == 0 {
+		t.Fatal("expected list-sources output to be non-empty")
+	}
+
+	recvPCAP := filepath.Join(t.TempDir(), "recv_normal_ipv6.pcap")
+	recvAudioPort := freeUDPPortOnIP(t, "::1")
+	recvVideoPort := freeUDPPortOnIP(t, "::1")
+	sendAudioPort := freeUDPPortOnIP(t, "::1")
+	sendVideoPort := freeUDPPortOnIP(t, "::1")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	recvArgs := []string{
+		"--bind-ip", "::1",
+		"--audio-port", fmt.Sprint(recvAudioPort),
+		"--video-port", fmt.Sprint(recvVideoPort),
+		"--recv-pcap", recvPCAP,
+		"--duration", "30",
+	}
+	sendArgs := []string{
+		"--bind-ip", "::1",
+		"--audio-port", fmt.Sprint(sendAudioPort),
+		"--video-port", fmt.Sprint(sendVideoPort),
+		"--audio-to", fmt.Sprintf("[::1]:%d", recvAudioPort),
+		"--video-to", fmt.Sprintf("[::1]:%d", recvVideoPort),
+		"--audio-ssrc", fmt.Sprintf("0x%08x", audioSSRC),
+		"--video-ssrc", fmt.Sprintf("0x%08x", videoSSRC),
+		"--send-pcap", filepath.Join(rootDir, "testdata", "normal.pcap"),
+		"--pacing", "capture",
+	}
+
+	recvCmd := exec.CommandContext(ctx, binaryPath, recvArgs...)
+	recvCmd.Dir = rootDir
+	var recvOutput bytes.Buffer
+	recvCmd.Stdout = &recvOutput
+	recvCmd.Stderr = &recvOutput
+	if err := recvCmd.Start(); err != nil {
+		t.Fatalf("start receiver: %v", err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	sendCmd := exec.CommandContext(ctx, binaryPath, sendArgs...)
+	sendCmd.Dir = rootDir
+	var sendOutput bytes.Buffer
+	sendCmd.Stdout = &sendOutput
+	sendCmd.Stderr = &sendOutput
+	if err := sendCmd.Start(); err != nil {
+		_ = recvCmd.Process.Kill()
+		t.Fatalf("start sender: %v", err)
+	}
+
+	sendErr := sendCmd.Wait()
+	recvErr := recvCmd.Wait()
+	if sendErr != nil {
+		t.Fatalf("sender failed: %v\n%s", sendErr, sendOutput.String())
+	}
+	if recvErr != nil {
+		t.Fatalf("receiver failed: %v\n%s", recvErr, recvOutput.String())
+	}
+
+	actual := runListSources(t, rootDir, binaryPath, recvPCAP)
+	assertSourceCounts(t, expected, actual)
+}
+
 func repoRoot(t *testing.T) string {
 	t.Helper()
 	wd, err := os.Getwd()
@@ -209,7 +287,12 @@ func filterSources(sourceCounts map[sourceKey]sourceStats, allowedSSRCs map[uint
 
 func freeUDPPort(t *testing.T) int {
 	t.Helper()
-	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	return freeUDPPortOnIP(t, "127.0.0.1")
+}
+
+func freeUDPPortOnIP(t *testing.T, bindIP string) int {
+	t.Helper()
+	conn, err := net.ListenPacket("udp", net.JoinHostPort(bindIP, "0"))
 	if err != nil {
 		t.Fatalf("listen udp: %v", err)
 	}

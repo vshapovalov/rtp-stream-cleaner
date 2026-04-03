@@ -180,6 +180,10 @@ func run(cfg config) error {
 	if bindIP == nil {
 		return fmt.Errorf("invalid bind-ip: %s", cfg.bindIP)
 	}
+	network, err := udpNetworkForIP(bindIP)
+	if err != nil {
+		return err
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if cfg.duration > 0 {
@@ -188,12 +192,12 @@ func run(cfg config) error {
 		defer cancel()
 	}
 
-	audioConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: bindIP, Port: cfg.audioPort})
+	audioConn, err := net.ListenUDP(network, &net.UDPAddr{IP: bindIP, Port: cfg.audioPort})
 	if err != nil {
 		return fmt.Errorf("listen audio: %w", err)
 	}
 	defer audioConn.Close()
-	videoConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: bindIP, Port: cfg.videoPort})
+	videoConn, err := net.ListenUDP(network, &net.UDPAddr{IP: bindIP, Port: cfg.videoPort})
 	if err != nil {
 		return fmt.Errorf("listen video: %w", err)
 	}
@@ -232,7 +236,7 @@ func run(cfg config) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sendDone <- sendLoop(ctx, cfg, audioConn, videoConn, logger, &stats)
+			sendDone <- sendLoop(ctx, cfg, network, audioConn, videoConn, logger, &stats)
 		}()
 	}
 
@@ -296,12 +300,22 @@ func recvLoop(ctx context.Context, label string, conn *net.UDPConn, writer *pcap
 	}
 }
 
-func sendLoop(ctx context.Context, cfg config, audioConn, videoConn *net.UDPConn, logger *slog.Logger, stats *stats) error {
-	audioAddr, err := net.ResolveUDPAddr("udp", cfg.audioTo)
+func udpNetworkForIP(ip net.IP) (string, error) {
+	if ip4 := ip.To4(); ip4 != nil {
+		return "udp4", nil
+	}
+	if ip.To16() != nil {
+		return "udp6", nil
+	}
+	return "", fmt.Errorf("invalid bind-ip: %s", ip.String())
+}
+
+func sendLoop(ctx context.Context, cfg config, network string, audioConn, videoConn *net.UDPConn, logger *slog.Logger, stats *stats) error {
+	audioAddr, err := net.ResolveUDPAddr(network, cfg.audioTo)
 	if err != nil {
 		return fmt.Errorf("resolve audio-to: %w", err)
 	}
-	videoAddr, err := net.ResolveUDPAddr("udp", cfg.videoTo)
+	videoAddr, err := net.ResolveUDPAddr(network, cfg.videoTo)
 	if err != nil {
 		return fmt.Errorf("resolve video-to: %w", err)
 	}
