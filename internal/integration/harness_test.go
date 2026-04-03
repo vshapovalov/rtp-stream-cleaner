@@ -127,6 +127,7 @@ type rtpCleanerInstance struct {
 }
 
 type rtpPeerSendConfig struct {
+	BindIP    string
 	AudioPort int
 	VideoPort int
 	AudioTo   string
@@ -141,6 +142,7 @@ type rtpPeerSendConfig struct {
 }
 
 type rtpPeerRecvConfig struct {
+	BindIP    string
 	AudioPort int
 	VideoPort int
 	RecvPCAP  string
@@ -322,13 +324,16 @@ func rtpPeerListSources(t *testing.T, pcapPath string) ([]rtpPeerSourceStats, er
 func rtpPeerSendPCAP(t *testing.T, cfg rtpPeerSendConfig) error {
 	t.Helper()
 	binary := buildRtpPeer(t)
+	if cfg.BindIP == "" {
+		cfg.BindIP = "127.0.0.1"
+	}
 	if cfg.Timeout == 0 {
 		cfg.Timeout = 15 * time.Second
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
 	defer cancel()
 	args := []string{
-		"--bind-ip", "127.0.0.1",
+		"--bind-ip", cfg.BindIP,
 		"--audio-port", strconv.Itoa(cfg.AudioPort),
 		"--video-port", strconv.Itoa(cfg.VideoPort),
 		"--audio-to", cfg.AudioTo,
@@ -361,13 +366,16 @@ func rtpPeerSendPCAP(t *testing.T, cfg rtpPeerSendConfig) error {
 func rtpPeerRecvPCAP(t *testing.T, cfg rtpPeerRecvConfig) error {
 	t.Helper()
 	binary := buildRtpPeer(t)
+	if cfg.BindIP == "" {
+		cfg.BindIP = "127.0.0.1"
+	}
 	if cfg.Timeout == 0 {
 		cfg.Timeout = 15 * time.Second
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
 	defer cancel()
 	args := []string{
-		"--bind-ip", "127.0.0.1",
+		"--bind-ip", cfg.BindIP,
 		"--audio-port", strconv.Itoa(cfg.AudioPort),
 		"--video-port", strconv.Itoa(cfg.VideoPort),
 		"--recv-pcap", cfg.RecvPCAP,

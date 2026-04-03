@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -59,5 +60,36 @@ func TestListSourcesNormalPCAP(t *testing.T) {
 		if _, ok := got[ssrc]; !ok {
 			t.Fatalf("missing ssrc 0x%08x in output: %s", ssrc, output.String())
 		}
+	}
+}
+
+func TestUDPNetworkForIP(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{name: "ipv4", input: "127.0.0.1", want: "udp4"},
+		{name: "ipv6", input: "::1", want: "udp6"},
+		{name: "invalid", input: "not-an-ip", wantErr: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := udpNetworkForIP(net.ParseIP(tc.input))
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("network mismatch: got %s, want %s", got, tc.want)
+			}
+		})
 	}
 }
