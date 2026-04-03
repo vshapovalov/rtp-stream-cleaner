@@ -15,8 +15,8 @@ import (
 )
 
 type SessionManager interface {
-	Create(callID, fromTag, toTag string, videoFix bool) (*session.Session, error)
-	CreateWithInitialDest(callID, fromTag, toTag string, videoFix bool, initialAudioDest, initialVideoDest *net.UDPAddr) (*session.Session, error)
+	Create(callID, fromTag, toTag string, videoFix bool, isIPv6 bool) (*session.Session, error)
+	CreateWithInitialDest(callID, fromTag, toTag string, videoFix bool, isIPv6 bool, initialAudioDest, initialVideoDest *net.UDPAddr) (*session.Session, error)
 	Get(id string) (*session.Session, bool)
 	UpdateRTPDest(id string, audioDest, videoDest *net.UDPAddr) (*session.Session, bool)
 	Delete(id string) bool
@@ -25,6 +25,7 @@ type SessionManager interface {
 type Handler struct {
 	manager         SessionManager
 	publicIP        string
+	publicIPv6      string
 	internalIP      string
 	servicePassword string
 }
@@ -37,6 +38,7 @@ func NewHandler(cfg config.Config, manager SessionManager) *Handler {
 	return &Handler{
 		manager:         manager,
 		publicIP:        cfg.PublicIP,
+		publicIPv6:      cfg.PublicIPv6,
 		internalIP:      internalIP,
 		servicePassword: cfg.ServicePassword,
 	}
@@ -66,6 +68,7 @@ type createSessionRequest struct {
 	CallID  string `json:"call_id"`
 	FromTag string `json:"from_tag"`
 	ToTag   string `json:"to_tag"`
+	IsIPv6  bool   `json:"is_ipv6"`
 	Audio   struct {
 		Enable        bool    `json:"enable"`
 		RTPEngineDest *string `json:"rtpengine_dest"`
@@ -147,9 +150,17 @@ type errorResponse struct {
 	Error string `json:"error"`
 }
 
-func newCreateSessionResponse(publicIP, internalIP string, created *session.Session) createSessionResponse {
+func selectMediaIPs(defaultPublicIP, defaultInternalIP, publicIPv6 string, created *session.Session) (string, string) {
+	if created != nil && created.IsIPv6 {
+		return publicIPv6, publicIPv6
+	}
+	return defaultPublicIP, defaultInternalIP
+}
+
+func newCreateSessionResponse(defaultPublicIP, defaultInternalIP, publicIPv6 string, created *session.Session) createSessionResponse {
 	mediaAudio := created.AudioState()
 	mediaVideo := created.VideoState()
+	publicIP, internalIP := selectMediaIPs(defaultPublicIP, defaultInternalIP, publicIPv6, created)
 	return createSessionResponse{
 		ID:         created.ID,
 		PublicIP:   publicIP,
@@ -169,11 +180,12 @@ func newMediaStateResponse(media session.Media) mediaStateResponse {
 	}
 }
 
-func newGetSessionResponse(publicIP, internalIP string, found *session.Session) getSessionResponse {
+func newGetSessionResponse(defaultPublicIP, defaultInternalIP, publicIPv6 string, found *session.Session) getSessionResponse {
 	audioCounters := found.AudioCountersSnapshot()
 	videoCounters := found.VideoCountersSnapshot()
 	audioMedia := found.AudioState()
 	videoMedia := found.VideoState()
+	publicIP, internalIP := selectMediaIPs(defaultPublicIP, defaultInternalIP, publicIPv6, found)
 	return getSessionResponse{
 		ID:                 found.ID,
 		CallID:             found.CallID,
@@ -233,6 +245,11 @@ func (h *Handler) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "call_id, from_tag, and to_tag are required"})
 		return
 	}
+	if req.IsIPv6 && h.publicIPv6 == "" {
+		logging.L().Warn("session.create failed", "error", "PUBLIC_IP_V6 is required when is_ipv6=true")
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "PUBLIC_IP_V6 is required when is_ipv6=true"})
+		return
+	}
 	// Default to true when omitted to preserve legacy behavior (video fix enabled).
 	videoFix := true
 	if req.Video.Fix != nil {
@@ -263,9 +280,9 @@ func (h *Handler) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 		err     error
 	)
 	if audioDest != nil || videoDest != nil {
-		created, err = h.manager.CreateWithInitialDest(req.CallID, req.FromTag, req.ToTag, videoFix, audioDest, videoDest)
+		created, err = h.manager.CreateWithInitialDest(req.CallID, req.FromTag, req.ToTag, videoFix, req.IsIPv6, audioDest, videoDest)
 	} else {
-		created, err = h.manager.Create(req.CallID, req.FromTag, req.ToTag, videoFix)
+		created, err = h.manager.Create(req.CallID, req.FromTag, req.ToTag, videoFix, req.IsIPv6)
 	}
 	if err != nil {
 		status := http.StatusInternalServerError
@@ -276,7 +293,7 @@ func (h *Handler) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, status, errorResponse{Error: err.Error()})
 		return
 	}
-	resp := newCreateSessionResponse(h.publicIP, h.internalIP, created)
+	resp := newCreateSessionResponse(h.publicIP, h.internalIP, h.publicIPv6, created)
 	logging.WithSessionID(created.ID).Info(
 		"session.create",
 		"call_id",
@@ -291,6 +308,12 @@ func (h *Handler) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 		req.Video.Enable,
 		"video_fix",
 		videoFix,
+		"is_ipv6",
+		req.IsIPv6,
+		"network_family",
+		map[bool]string{true: "ipv6", false: "ipv4"}[req.IsIPv6],
+		"bind_ip",
+		map[bool]string{true: h.publicIPv6, false: "0.0.0.0"}[req.IsIPv6],
 		"audio_a_port",
 		created.Audio.APort,
 		"audio_b_port",
@@ -336,7 +359,7 @@ func (h *Handler) handleSessionGet(w http.ResponseWriter, r *http.Request, id st
 		writeJSON(w, http.StatusNotFound, errorResponse{Error: "session not found"})
 		return
 	}
-	resp := newGetSessionResponse(h.publicIP, h.internalIP, found)
+	resp := newGetSessionResponse(h.publicIP, h.internalIP, h.publicIPv6, found)
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -373,7 +396,7 @@ func (h *Handler) handleSessionUpdate(w http.ResponseWriter, r *http.Request, id
 		writeJSON(w, http.StatusNotFound, errorResponse{Error: "session not found"})
 		return
 	}
-	resp := newGetSessionResponse(h.publicIP, h.internalIP, updated)
+	resp := newGetSessionResponse(h.publicIP, h.internalIP, h.publicIPv6, updated)
 	logAttrs := []any{}
 	if audioDest != nil {
 		logAttrs = append(logAttrs, "audio_dest", audioDest.String())

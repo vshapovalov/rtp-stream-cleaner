@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -28,6 +29,7 @@ func newTestManager(t *testing.T, idleTimeout time.Duration) *Manager {
 		false,
 		8,
 		10*time.Millisecond,
+		"::1",
 		ProxyLogConfig{},
 		managerDeps{
 			startReaper: false,
@@ -57,7 +59,7 @@ func newTestManager(t *testing.T, idleTimeout time.Duration) *Manager {
 // a mismatch between created and stored data.
 func TestManager_CreateStoresSessionAndReturnsID(t *testing.T) {
 	manager := newTestManager(t, 0)
-	created, err := manager.Create("call-1", "from-1", "to-1", true)
+	created, err := manager.Create("call-1", "from-1", "to-1", true, false)
 	if err != nil {
 		t.Fatalf("unexpected create error: %v", err)
 	}
@@ -85,7 +87,7 @@ func TestManager_CreateStoresSessionAndReturnsID(t *testing.T) {
 // pointer due to reintroduced cloning.
 func TestManager_Get_ReturnsStoredPointer(t *testing.T) {
 	manager := newTestManager(t, 0)
-	created, err := manager.Create("call-get", "from-get", "to-get", false)
+	created, err := manager.Create("call-get", "from-get", "to-get", false, false)
 	if err != nil {
 		t.Fatalf("unexpected create error: %v", err)
 	}
@@ -111,7 +113,7 @@ func TestManager_Get_ReturnsStoredPointer(t *testing.T) {
 // would show a nil audio destination after a video update or vice versa.
 func TestManager_UpdateSetsDestIndependentlyAudioVideo(t *testing.T) {
 	manager := newTestManager(t, 0)
-	created, err := manager.Create("call-2", "from-2", "to-2", false)
+	created, err := manager.Create("call-2", "from-2", "to-2", false, false)
 	if err != nil {
 		t.Fatalf("unexpected create error: %v", err)
 	}
@@ -149,7 +151,7 @@ func TestManager_UpdateSetsDestIndependentlyAudioVideo(t *testing.T) {
 // enabled/disabled flags.
 func TestManager_UpdateRTPDest_DisablesMediaOnPortZero(t *testing.T) {
 	manager := newTestManager(t, 0)
-	created, err := manager.Create("call-6", "from-6", "to-6", false)
+	created, err := manager.Create("call-6", "from-6", "to-6", false, false)
 	if err != nil {
 		t.Fatalf("unexpected create error: %v", err)
 	}
@@ -207,7 +209,7 @@ func TestManager_CreateWithInitialDest_AppliesDestinations(t *testing.T) {
 	audioDest := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 10), Port: 40100}
 	videoDest := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 20), Port: 0}
 
-	created, err := manager.CreateWithInitialDest("call-7", "from-7", "to-7", false, audioDest, videoDest)
+	created, err := manager.CreateWithInitialDest("call-7", "from-7", "to-7", false, false, audioDest, videoDest)
 	if err != nil {
 		t.Fatalf("unexpected create error: %v", err)
 	}
@@ -241,7 +243,7 @@ func TestManager_CreateWithInitialDest_AppliesDestinations(t *testing.T) {
 // session still being returned by Get after deletion.
 func TestManager_DeleteRemovesSession(t *testing.T) {
 	manager := newTestManager(t, 0)
-	created, err := manager.Create("call-3", "from-3", "to-3", false)
+	created, err := manager.Create("call-3", "from-3", "to-3", false, false)
 	if err != nil {
 		t.Fatalf("unexpected create error: %v", err)
 	}
@@ -269,11 +271,11 @@ func TestManager_DeleteRemovesSession(t *testing.T) {
 func TestManager_IdleCleanup_RemovesOnlyIdleSessions(t *testing.T) {
 	idleTimeout := 5 * time.Minute
 	manager := newTestManager(t, idleTimeout)
-	createdIdle, err := manager.Create("call-4", "from-4", "to-4", false)
+	createdIdle, err := manager.Create("call-4", "from-4", "to-4", false, false)
 	if err != nil {
 		t.Fatalf("unexpected create error: %v", err)
 	}
-	createdActive, err := manager.Create("call-5", "from-5", "to-5", false)
+	createdActive, err := manager.Create("call-5", "from-5", "to-5", false, false)
 	if err != nil {
 		t.Fatalf("unexpected create error: %v", err)
 	}
@@ -290,5 +292,152 @@ func TestManager_IdleCleanup_RemovesOnlyIdleSessions(t *testing.T) {
 	}
 	if _, ok := manager.Get(createdActive.ID); !ok {
 		t.Fatalf("expected active session to remain")
+	}
+}
+
+func TestManager_Create_IsIPv6FamilyAndBindSelection(t *testing.T) {
+	t.Run("ipv4", func(t *testing.T) {
+		allocator, err := NewPortAllocator(18000, 18010)
+		if err != nil {
+			t.Fatalf("allocator: %v", err)
+		}
+		var listenCalls []struct {
+			network string
+			addr    *net.UDPAddr
+		}
+		manager := newManagerWithDeps(
+			allocator, 5, time.Second, time.Second, 0, 0, false, false, 8, 10*time.Millisecond, "::1", ProxyLogConfig{},
+			managerDeps{
+				startReaper: false,
+				listenUDP: func(network string, laddr *net.UDPAddr) (*net.UDPConn, error) {
+					listenCalls = append(listenCalls, struct {
+						network string
+						addr    *net.UDPAddr
+					}{network: network, addr: laddr})
+					return nil, nil
+				},
+				newAudioProxy: func(*Session, *net.UDPConn, *net.UDPConn, int, time.Duration, time.Duration, ProxyLogConfig) sessionProxy {
+					return &noopProxy{}
+				},
+				newVideoProxy: func(*Session, *net.UDPConn, *net.UDPConn, int, time.Duration, time.Duration, time.Duration, bool, bool, bool, int, time.Duration, ProxyLogConfig) sessionProxy {
+					return &noopProxy{}
+				},
+			},
+		)
+		created, err := manager.Create("c1", "f1", "t1", false, false)
+		if err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		if created.IsIPv6 {
+			t.Fatalf("expected IsIPv6=false")
+		}
+		for i, call := range listenCalls {
+			if call.network != "udp4" {
+				t.Fatalf("call %d expected udp4, got %s", i, call.network)
+			}
+			if !call.addr.IP.Equal(net.IPv4zero) {
+				t.Fatalf("call %d expected bind 0.0.0.0, got %s", i, call.addr.IP.String())
+			}
+		}
+	})
+
+	t.Run("ipv6", func(t *testing.T) {
+		allocator, err := NewPortAllocator(18100, 18110)
+		if err != nil {
+			t.Fatalf("allocator: %v", err)
+		}
+		var listenCalls []struct {
+			network string
+			addr    *net.UDPAddr
+		}
+		manager := newManagerWithDeps(
+			allocator, 5, time.Second, time.Second, 0, 0, false, false, 8, 10*time.Millisecond, "2001:db8::10", ProxyLogConfig{},
+			managerDeps{
+				startReaper: false,
+				listenUDP: func(network string, laddr *net.UDPAddr) (*net.UDPConn, error) {
+					listenCalls = append(listenCalls, struct {
+						network string
+						addr    *net.UDPAddr
+					}{network: network, addr: laddr})
+					return nil, nil
+				},
+				newAudioProxy: func(*Session, *net.UDPConn, *net.UDPConn, int, time.Duration, time.Duration, ProxyLogConfig) sessionProxy {
+					return &noopProxy{}
+				},
+				newVideoProxy: func(*Session, *net.UDPConn, *net.UDPConn, int, time.Duration, time.Duration, time.Duration, bool, bool, bool, int, time.Duration, ProxyLogConfig) sessionProxy {
+					return &noopProxy{}
+				},
+			},
+		)
+		created, err := manager.Create("c2", "f2", "t2", false, true)
+		if err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		if !created.IsIPv6 {
+			t.Fatalf("expected IsIPv6=true")
+		}
+		for i, call := range listenCalls {
+			if call.network != "udp6" {
+				t.Fatalf("call %d expected udp6, got %s", i, call.network)
+			}
+			if call.addr.IP.String() != "2001:db8::10" {
+				t.Fatalf("call %d expected bind 2001:db8::10, got %s", i, call.addr.IP.String())
+			}
+		}
+	})
+}
+
+func TestManager_Create_SocketErrorCleansUpAndReleasesPorts(t *testing.T) {
+	allocator, err := NewPortAllocator(18200, 18210)
+	if err != nil {
+		t.Fatalf("allocator: %v", err)
+	}
+	callIndex := 0
+	var openedConn *net.UDPConn
+	manager := newManagerWithDeps(
+		allocator, 5, time.Second, time.Second, 0, 0, false, false, 8, 10*time.Millisecond, "::1", ProxyLogConfig{},
+		managerDeps{
+			startReaper: false,
+			listenUDP: func(network string, laddr *net.UDPAddr) (*net.UDPConn, error) {
+				callIndex++
+				if callIndex == 1 {
+					conn, err := net.ListenUDP(network, laddr)
+					if err != nil {
+						t.Fatalf("listen first socket: %v", err)
+					}
+					openedConn = conn
+					return conn, nil
+				}
+				return nil, errors.New("listen failed")
+			},
+			newAudioProxy: func(*Session, *net.UDPConn, *net.UDPConn, int, time.Duration, time.Duration, ProxyLogConfig) sessionProxy {
+				return &noopProxy{}
+			},
+			newVideoProxy: func(*Session, *net.UDPConn, *net.UDPConn, int, time.Duration, time.Duration, time.Duration, bool, bool, bool, int, time.Duration, ProxyLogConfig) sessionProxy {
+				return &noopProxy{}
+			},
+		},
+	)
+	_, err = manager.Create("c3", "f3", "t3", false, false)
+	if err == nil {
+		t.Fatalf("expected create error")
+	}
+	if openedConn == nil {
+		t.Fatalf("expected first socket to open")
+	}
+	rebound, bindErr := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 18200})
+	if bindErr != nil {
+		t.Fatalf("expected first socket closed on error, bind failed: %v", bindErr)
+	}
+	_ = rebound.Close()
+	if len(manager.sessions) != 0 {
+		t.Fatalf("expected no session stored on create failure")
+	}
+	ports, err := allocator.Allocate(4)
+	if err != nil {
+		t.Fatalf("expected ports released after failure: %v", err)
+	}
+	if ports[0] != 18200 {
+		t.Fatalf("expected allocator to reuse released ports, got %v", ports)
 	}
 }

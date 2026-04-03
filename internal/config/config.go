@@ -14,6 +14,7 @@ type Config struct {
 	APIListenAddr              string `json:"api_listen_addr"`
 	ServicePassword            string `json:"service_password"`
 	PublicIP                   string `json:"public_ip"`
+	PublicIPv6                 string `json:"public_ip_v6"`
 	InternalIP                 string `json:"internal_ip"`
 	RTPPortMin                 int    `json:"rtp_port_min"`
 	RTPPortMax                 int    `json:"rtp_port_max"`
@@ -85,6 +86,7 @@ func loadFromEnv() Config {
 		APIListenAddr:              getEnv("API_LISTEN_ADDR", "0.0.0.0:8080"),
 		ServicePassword:            os.Getenv("SERVICE_PASSWORD"),
 		PublicIP:                   os.Getenv("PUBLIC_IP"),
+		PublicIPv6:                 os.Getenv("PUBLIC_IP_V6"),
 		InternalIP:                 os.Getenv("INTERNAL_IP"),
 		RTPPortMin:                 getEnvInt("RTP_PORT_MIN", 30000),
 		RTPPortMax:                 getEnvInt("RTP_PORT_MAX", 40000),

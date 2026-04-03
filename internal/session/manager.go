@@ -25,6 +25,7 @@ type Session struct {
 	CallID              string
 	FromTag             string
 	ToTag               string
+	IsIPv6              bool
 	CreatedAt           time.Time
 	Audio               Media
 	Video               Media
@@ -59,6 +60,7 @@ type Manager struct {
 	videoReorderEnabled      bool
 	videoReorderMaxPackets   int
 	videoReorderMaxWait      time.Duration
+	publicIPv6BindIP         string
 	proxyLogConfig           ProxyLogConfig
 	now                      func() time.Time
 	listenUDP                func(network string, laddr *net.UDPAddr) (*net.UDPConn, error)
@@ -89,11 +91,11 @@ type ProxyLogConfig struct {
 	PacketLogOnAnomaly bool
 }
 
-func NewManager(allocator *PortAllocator, peerLearningMinPackets int, peerRelearnIdle, peerLearningCandidateTTL, maxFrameWait, idleTimeout time.Duration, videoInjectCachedSPSPPS, videoReorderEnabled bool, videoReorderMaxPackets int, videoReorderMaxWait time.Duration, logConfig ProxyLogConfig) *Manager {
-	return newManagerWithDeps(allocator, peerLearningMinPackets, peerRelearnIdle, peerLearningCandidateTTL, maxFrameWait, idleTimeout, videoInjectCachedSPSPPS, videoReorderEnabled, videoReorderMaxPackets, videoReorderMaxWait, logConfig, managerDeps{startReaper: true})
+func NewManager(allocator *PortAllocator, peerLearningMinPackets int, peerRelearnIdle, peerLearningCandidateTTL, maxFrameWait, idleTimeout time.Duration, videoInjectCachedSPSPPS, videoReorderEnabled bool, videoReorderMaxPackets int, videoReorderMaxWait time.Duration, publicIPv6BindIP string, logConfig ProxyLogConfig) *Manager {
+	return newManagerWithDeps(allocator, peerLearningMinPackets, peerRelearnIdle, peerLearningCandidateTTL, maxFrameWait, idleTimeout, videoInjectCachedSPSPPS, videoReorderEnabled, videoReorderMaxPackets, videoReorderMaxWait, publicIPv6BindIP, logConfig, managerDeps{startReaper: true})
 }
 
-func newManagerWithDeps(allocator *PortAllocator, peerLearningMinPackets int, peerRelearnIdle, peerLearningCandidateTTL, maxFrameWait, idleTimeout time.Duration, videoInjectCachedSPSPPS, videoReorderEnabled bool, videoReorderMaxPackets int, videoReorderMaxWait time.Duration, logConfig ProxyLogConfig, deps managerDeps) *Manager {
+func newManagerWithDeps(allocator *PortAllocator, peerLearningMinPackets int, peerRelearnIdle, peerLearningCandidateTTL, maxFrameWait, idleTimeout time.Duration, videoInjectCachedSPSPPS, videoReorderEnabled bool, videoReorderMaxPackets int, videoReorderMaxWait time.Duration, publicIPv6BindIP string, logConfig ProxyLogConfig, deps managerDeps) *Manager {
 	if deps.now == nil {
 		deps.now = time.Now
 	}
@@ -122,6 +124,7 @@ func newManagerWithDeps(allocator *PortAllocator, peerLearningMinPackets int, pe
 		videoReorderEnabled:      videoReorderEnabled,
 		videoReorderMaxPackets:   videoReorderMaxPackets,
 		videoReorderMaxWait:      videoReorderMaxWait,
+		publicIPv6BindIP:         publicIPv6BindIP,
 		proxyLogConfig:           logConfig,
 		now:                      deps.now,
 		listenUDP:                deps.listenUDP,
@@ -136,17 +139,22 @@ func newManagerWithDeps(allocator *PortAllocator, peerLearningMinPackets int, pe
 	return manager
 }
 
-func (m *Manager) Create(callID, fromTag, toTag string, videoFix bool) (*Session, error) {
-	return m.createWithDest(callID, fromTag, toTag, videoFix, nil, nil)
+func (m *Manager) Create(callID, fromTag, toTag string, videoFix bool, isIPv6 bool) (*Session, error) {
+	return m.createWithDest(callID, fromTag, toTag, videoFix, isIPv6, nil, nil)
 }
 
-func (m *Manager) CreateWithInitialDest(callID, fromTag, toTag string, videoFix bool, initialAudioDest, initialVideoDest *net.UDPAddr) (*Session, error) {
-	return m.createWithDest(callID, fromTag, toTag, videoFix, initialAudioDest, initialVideoDest)
+func (m *Manager) CreateWithInitialDest(callID, fromTag, toTag string, videoFix bool, isIPv6 bool, initialAudioDest, initialVideoDest *net.UDPAddr) (*Session, error) {
+	return m.createWithDest(callID, fromTag, toTag, videoFix, isIPv6, initialAudioDest, initialVideoDest)
 }
 
-func (m *Manager) createWithDest(callID, fromTag, toTag string, videoFix bool, initialAudioDest, initialVideoDest *net.UDPAddr) (*Session, error) {
+func (m *Manager) createWithDest(callID, fromTag, toTag string, videoFix bool, isIPv6 bool, initialAudioDest, initialVideoDest *net.UDPAddr) (*Session, error) {
 	ports, err := m.allocator.Allocate(4)
 	if err != nil {
+		return nil, err
+	}
+	network, bindIP, err := resolveRTPBindConfig(isIPv6, m.publicIPv6BindIP)
+	if err != nil {
+		m.allocator.Release(ports)
 		return nil, err
 	}
 	session := &Session{
@@ -154,6 +162,7 @@ func (m *Manager) createWithDest(callID, fromTag, toTag string, videoFix bool, i
 		CallID:    callID,
 		FromTag:   fromTag,
 		ToTag:     toTag,
+		IsIPv6:    isIPv6,
 		CreatedAt: m.now(),
 		Audio: Media{
 			APort:          ports[0],
@@ -178,13 +187,13 @@ func (m *Manager) createWithDest(callID, fromTag, toTag string, videoFix bool, i
 	session.videoDisabledReason.Store("")
 	applyRTPDest(session, initialAudioDest, initialVideoDest)
 
-	aConn, err := m.listenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: session.Audio.APort})
+	aConn, err := m.listenUDP(network, &net.UDPAddr{IP: bindIP, Port: session.Audio.APort})
 	if err != nil {
 		logging.WithSessionID(session.ID).Error("session.create failed", "error", err)
 		m.allocator.Release(ports)
 		return nil, fmt.Errorf("audio a socket: %w", err)
 	}
-	bConn, err := m.listenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: session.Audio.BPort})
+	bConn, err := m.listenUDP(network, &net.UDPAddr{IP: bindIP, Port: session.Audio.BPort})
 	if err != nil {
 		logging.WithSessionID(session.ID).Error("session.create failed", "error", err)
 		if aConn != nil {
@@ -193,7 +202,7 @@ func (m *Manager) createWithDest(callID, fromTag, toTag string, videoFix bool, i
 		m.allocator.Release(ports)
 		return nil, fmt.Errorf("audio b socket: %w", err)
 	}
-	videoAConn, err := m.listenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: session.Video.APort})
+	videoAConn, err := m.listenUDP(network, &net.UDPAddr{IP: bindIP, Port: session.Video.APort})
 	if err != nil {
 		logging.WithSessionID(session.ID).Error("session.create failed", "error", err)
 		if aConn != nil {
@@ -205,7 +214,7 @@ func (m *Manager) createWithDest(callID, fromTag, toTag string, videoFix bool, i
 		m.allocator.Release(ports)
 		return nil, fmt.Errorf("video a socket: %w", err)
 	}
-	videoBConn, err := m.listenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: session.Video.BPort})
+	videoBConn, err := m.listenUDP(network, &net.UDPAddr{IP: bindIP, Port: session.Video.BPort})
 	if err != nil {
 		logging.WithSessionID(session.ID).Error("session.create failed", "error", err)
 		if aConn != nil {
@@ -235,6 +244,17 @@ func (m *Manager) createWithDest(callID, fromTag, toTag string, videoFix bool, i
 	session.audioProxy.start()
 	session.videoProxy.start()
 	return session, nil
+}
+
+func resolveRTPBindConfig(isIPv6 bool, publicIPv6BindIP string) (string, net.IP, error) {
+	if isIPv6 {
+		ip := net.ParseIP(publicIPv6BindIP)
+		if ip == nil || ip.To16() == nil || ip.To4() != nil {
+			return "", nil, fmt.Errorf("PUBLIC_IP_V6 is required when is_ipv6=true")
+		}
+		return "udp6", ip, nil
+	}
+	return "udp4", net.IPv4zero, nil
 }
 
 func (m *Manager) Get(id string) (*Session, bool) {
