@@ -45,11 +45,25 @@ paths:
                   call_id: demo
                   from_tag: a
                   to_tag: b
+                  is_ipv6: false
                   audio:
                     enable: true
                   video:
                     enable: true
                     fix: true
+              create_ipv6:
+                value:
+                  call_id: demo-v6
+                  from_tag: a
+                  to_tag: b
+                  is_ipv6: true
+                  audio:
+                    enable: true
+                    rtpengine_dest: "[2001:db8::20]:40100"
+                  video:
+                    enable: true
+                    fix: true
+                    rtpengine_dest: "[2001:db8::20]:40102"
       responses:
         '200':
           description: Session created
@@ -227,6 +241,10 @@ components:
           type: string
         to_tag:
           type: string
+        is_ipv6:
+          type: boolean
+          default: false
+          description: When true, session RTP sockets are created in IPv6 mode and media IPs in responses are taken from public_ip_v6.
         audio:
           $ref: '#/components/schemas/MediaConfigRequest'
         video:

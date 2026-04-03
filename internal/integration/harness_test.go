@@ -51,6 +51,7 @@ type createSessionRequest struct {
 	CallID  string `json:"call_id"`
 	FromTag string `json:"from_tag"`
 	ToTag   string `json:"to_tag"`
+	IsIPv6  bool   `json:"is_ipv6,omitempty"`
 	Audio   struct {
 		Enable bool `json:"enable"`
 	} `json:"audio"`

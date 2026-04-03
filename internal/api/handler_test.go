@@ -20,6 +20,7 @@ type mockManager struct {
 		fromTag  string
 		toTag    string
 		videoFix bool
+		isIPv6   bool
 	}
 	createResult *session.Session
 	createErr    error
@@ -30,6 +31,7 @@ type mockManager struct {
 		fromTag          string
 		toTag            string
 		videoFix         bool
+		isIPv6           bool
 		initialAudioDest *net.UDPAddr
 		initialVideoDest *net.UDPAddr
 	}
@@ -50,21 +52,23 @@ type mockManager struct {
 	deleteOK    bool
 }
 
-func (m *mockManager) Create(callID, fromTag, toTag string, videoFix bool) (*session.Session, error) {
+func (m *mockManager) Create(callID, fromTag, toTag string, videoFix bool, isIPv6 bool) (*session.Session, error) {
 	m.createCalls++
 	m.createInput.callID = callID
 	m.createInput.fromTag = fromTag
 	m.createInput.toTag = toTag
 	m.createInput.videoFix = videoFix
+	m.createInput.isIPv6 = isIPv6
 	return m.createResult, m.createErr
 }
 
-func (m *mockManager) CreateWithInitialDest(callID, fromTag, toTag string, videoFix bool, initialAudioDest, initialVideoDest *net.UDPAddr) (*session.Session, error) {
+func (m *mockManager) CreateWithInitialDest(callID, fromTag, toTag string, videoFix bool, isIPv6 bool, initialAudioDest, initialVideoDest *net.UDPAddr) (*session.Session, error) {
 	m.createWithDestCalls++
 	m.createWithDestInput.callID = callID
 	m.createWithDestInput.fromTag = fromTag
 	m.createWithDestInput.toTag = toTag
 	m.createWithDestInput.videoFix = videoFix
+	m.createWithDestInput.isIPv6 = isIPv6
 	m.createWithDestInput.initialAudioDest = initialAudioDest
 	m.createWithDestInput.initialVideoDest = initialVideoDest
 	return m.createWithDestResult, m.createWithDestErr
@@ -89,7 +93,7 @@ func (m *mockManager) Delete(id string) bool {
 }
 
 func newTestHandler(manager SessionManager) *Handler {
-	cfg := config.Config{PublicIP: "203.0.113.1", InternalIP: "10.0.0.1", ServicePassword: "test-password"}
+	cfg := config.Config{PublicIP: "203.0.113.1", PublicIPv6: "2001:db8::10", InternalIP: "10.0.0.1", ServicePassword: "test-password"}
 	return NewHandler(cfg, manager)
 }
 
@@ -324,6 +328,118 @@ func TestAPI_CreateSession_AllowsVideoPortZero(t *testing.T) {
 	}
 	if manager.createWithDestInput.initialAudioDest != nil {
 		t.Fatalf("expected initial audio dest to be nil")
+	}
+}
+
+func TestAPI_CreateSession_IsIPv6Configured_UsesIPv6PathAndResponse(t *testing.T) {
+	manager := &mockManager{}
+	manager.createResult = &session.Session{
+		ID:      "sess-v6",
+		CallID:  "call-v6",
+		FromTag: "from-v6",
+		ToTag:   "to-v6",
+		IsIPv6:  true,
+		Audio:   session.Media{APort: 15000, BPort: 15001},
+		Video:   session.Media{APort: 15002, BPort: 15003},
+	}
+	handler := newTestHandler(manager)
+
+	payload := map[string]any{
+		"call_id":  "call-v6",
+		"from_tag": "from-v6",
+		"to_tag":   "to-v6",
+		"is_ipv6":  true,
+		"audio":    map[string]any{"enable": true},
+		"video":    map[string]any{"enable": true},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("unexpected marshal error: %v", err)
+	}
+	recorder := performRequest(handler, http.MethodPost, "/v1/session", bytes.NewBuffer(body))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+	if manager.createCalls != 1 {
+		t.Fatalf("expected Create to be called once")
+	}
+	if !manager.createInput.isIPv6 {
+		t.Fatalf("expected Create isIPv6=true")
+	}
+	var resp createSessionResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.PublicIP != "2001:db8::10" || resp.InternalIP != "2001:db8::10" {
+		t.Fatalf("expected IPv6 media IPs in response, got public=%q internal=%q", resp.PublicIP, resp.InternalIP)
+	}
+}
+
+func TestAPI_CreateSession_IsIPv6WithoutPublicIPv6_ReturnsBadRequest(t *testing.T) {
+	manager := &mockManager{}
+	handler := NewHandler(config.Config{
+		PublicIP:        "203.0.113.1",
+		InternalIP:      "10.0.0.1",
+		PublicIPv6:      "",
+		ServicePassword: "test-password",
+	}, manager)
+
+	payload := map[string]any{
+		"call_id":  "call-v6",
+		"from_tag": "from-v6",
+		"to_tag":   "to-v6",
+		"is_ipv6":  true,
+		"audio":    map[string]any{"enable": true},
+		"video":    map[string]any{"enable": true},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("unexpected marshal error: %v", err)
+	}
+	recorder := performRequest(handler, http.MethodPost, "/v1/session", bytes.NewBuffer(body))
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, recorder.Code)
+	}
+	if manager.createCalls != 0 || manager.createWithDestCalls != 0 {
+		t.Fatalf("expected manager create path not to be called")
+	}
+}
+
+func TestAPI_CreateSession_DefaultIsIPv4BackwardCompatible(t *testing.T) {
+	manager := &mockManager{}
+	manager.createResult = &session.Session{
+		ID:      "sess-v4",
+		CallID:  "call-v4",
+		FromTag: "from-v4",
+		ToTag:   "to-v4",
+		IsIPv6:  false,
+		Audio:   session.Media{APort: 16000, BPort: 16001},
+		Video:   session.Media{APort: 16002, BPort: 16003},
+	}
+	handler := newTestHandler(manager)
+
+	payload := map[string]any{
+		"call_id":  "call-v4",
+		"from_tag": "from-v4",
+		"to_tag":   "to-v4",
+		"audio":    map[string]any{"enable": true},
+		"video":    map[string]any{"enable": true},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("unexpected marshal error: %v", err)
+	}
+	recorder := performRequest(handler, http.MethodPost, "/v1/session", bytes.NewBuffer(body))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+	if manager.createCalls != 1 {
+		t.Fatalf("expected Create to be called once")
+	}
+	if manager.createInput.isIPv6 {
+		t.Fatalf("expected default isIPv6=false when omitted")
 	}
 }
 

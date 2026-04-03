@@ -5,6 +5,7 @@
 1. **INVITE from the doorphone**
    * Create a session in RTP-cleaner.
    * Obtain `public_ip/internal_ip` and `A/B` ports for audio/video.
+   * For IPv6 media call legs, set `is_ipv6=true` in create request (HTTP API endpoint still IPv4).
 2. **After rtpengine ports are known**
    * After `rtpengine_offer`/`rtpengine_answer`, the final rtpengine `ip:port` is known.
    * Call `update` and pass `rtpengine_dest` for audio/video.
@@ -22,6 +23,7 @@ curl -s -X POST http://127.0.0.1:8080/v1/session \
     "call_id":"call-123",
     "from_tag":"from-1",
     "to_tag":"to-1",
+    "is_ipv6":false,
     "audio":{"enable":true},
     "video":{"enable":true,"fix":true}
   }'
@@ -82,11 +84,13 @@ route[DELETE_RTP_CLEANER] {
 
 * `c=` → `PUBLIC_IP`
 * `m=` → `A_port` (audio/video)
+* For `is_ipv6=true` sessions, `c=` uses `PUBLIC_IP_V6`.
 
 ### SDP to rtpengine (leg B)
 
 * `c=` → `INTERNAL_IP` (if set), otherwise `PUBLIC_IP`
 * `m=` → `B_port` (audio/video)
+* For `is_ipv6=true` sessions, API returns IPv6 media IP consistently (`public_ip=internal_ip=PUBLIC_IP_V6`), use it for both directions to avoid mixed-family SDP.
 
 ## Important conditions
 

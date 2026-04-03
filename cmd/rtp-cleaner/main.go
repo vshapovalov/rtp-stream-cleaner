@@ -24,6 +24,9 @@ func main() {
 	if cfg.PublicIP != "" {
 		logger.Info("public_ip configured", "public_ip", cfg.PublicIP)
 	}
+	if cfg.PublicIPv6 != "" {
+		logger.Info("public_ip_v6 configured", "public_ip_v6", cfg.PublicIPv6)
+	}
 	if cfg.InternalIP != "" {
 		logger.Info("internal_ip configured", "internal_ip", cfg.InternalIP)
 	}
@@ -47,6 +50,7 @@ func main() {
 		cfg.VideoReorderEnabled,
 		cfg.VideoReorderMaxPackets,
 		time.Duration(cfg.VideoReorderMaxWaitMS)*time.Millisecond,
+		cfg.PublicIPv6,
 		session.ProxyLogConfig{
 			StatsInterval:      time.Duration(cfg.StatsLogIntervalSec) * time.Second,
 			PacketLog:          cfg.PacketLog,

@@ -33,6 +33,7 @@ If the file is absent, it falls back to environment variables.
 | `API_LISTEN_ADDR` | `0.0.0.0:8080` | HTTP listen address. |
 | `SERVICE_PASSWORD` | _(empty)_ | Required access token value for every HTTP API request (`access_token` query parameter). If empty, all API requests are rejected with `401`. |
 | `PUBLIC_IP` | _(required)_ | Public IP returned by the session API. |
+| `PUBLIC_IP_V6` | _(optional)_ | IPv6 address used for IPv6 RTP sessions (`is_ipv6=true`). Required only when creating IPv6 media sessions. |
 | `INTERNAL_IP` | _(optional)_ | Internal IP returned by the session API. If empty, `PUBLIC_IP` is used instead (so `PUBLIC_IP` must be set). |
 | `RTP_PORT_MIN` | `30000` | First port in allocator range. |
 | `RTP_PORT_MAX` | `40000` | Last port in allocator range. |
@@ -60,6 +61,14 @@ Create session:
 curl -s -X POST "http://127.0.0.1:8080/v1/session?access_token=<SERVICE_PASSWORD>" \
   -H 'Content-Type: application/json' \
   -d '{"call_id":"demo","from_tag":"a","to_tag":"b","audio":{"enable":true},"video":{"enable":true,"fix":true}}'
+```
+
+Create IPv6 RTP session (HTTP control plane stays IPv4-only):
+
+```bash
+curl -s -X POST "http://127.0.0.1:8080/v1/session?access_token=<SERVICE_PASSWORD>" \
+  -H 'Content-Type: application/json' \
+  -d '{"call_id":"demo-v6","from_tag":"a","to_tag":"b","is_ipv6":true,"audio":{"enable":true},"video":{"enable":true,"fix":true}}'
 ```
 
 Update session with rtpengine destination:

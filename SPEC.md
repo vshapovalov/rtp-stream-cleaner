@@ -132,6 +132,7 @@ Control is done from Kamailio via:
   "call_id": "string",
   "from_tag": "string",
   "to_tag": "string",
+  "is_ipv6": false,
   "audio": { "enable": true },
   "video": { "enable": true, "fix": true }
 }
@@ -148,6 +149,8 @@ Response:
   "video": { "a_port": 30004, "b_port": 30006 }
 }
 ```
+
+If `is_ipv6=true`, RTP sockets are bound as IPv6 (`udp6`) to `PUBLIC_IP_V6` and both `public_ip` and `internal_ip` in response use `PUBLIC_IP_V6` to keep one media address family in SDP rewrite flow.
 
 ### 5.2 Update session (assign rtpengine)
 
