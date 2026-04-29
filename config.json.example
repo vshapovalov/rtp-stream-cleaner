@@ -6,6 +6,7 @@
   "internal_ip": "10.0.0.10",
   "rtp_port_min": 30000,
   "rtp_port_max": 40000,
+  "rtp_port_bind_attempts": 20,
   "peer_learning_min_packets": 5,
   "peer_relearn_idle_ms": 1000,
   "peer_learning_candidate_ttl_ms": 4000,

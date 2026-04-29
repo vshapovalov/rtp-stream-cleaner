@@ -145,8 +145,8 @@ Response:
   "id": "S-123",
   "public_ip": "X.X.X.X",
   "internal_ip": "10.0.0.10",
-  "audio": { "a_port": 30000, "b_port": 30002 },
-  "video": { "a_port": 30004, "b_port": 30006 }
+  "audio": { "a_port": 31234, "b_port": 39876 },
+  "video": { "a_port": 30111, "b_port": 35555 }
 }
 ```
 
@@ -179,6 +179,7 @@ If `is_ipv6=true`, RTP sockets are bound as IPv6 (`udp6`) to `PUBLIC_IP_V6` and 
 Config:
 
 * `RTP_PORT_MIN` (default 30000)
+* `RTP_PORT_BIND_ATTEMPTS` (default 20)
 * `RTP_PORT_MAX` (default 40000)
 
 Requirements:

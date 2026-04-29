@@ -37,6 +37,7 @@ If the file is absent, it falls back to environment variables.
 | `INTERNAL_IP` | _(optional)_ | Internal IP returned by the session API. If empty, `PUBLIC_IP` is used instead (so `PUBLIC_IP` must be set). |
 | `RTP_PORT_MIN` | `30000` | First port in allocator range. |
 | `RTP_PORT_MAX` | `40000` | Last port in allocator range. |
+| `RTP_PORT_BIND_ATTEMPTS` | `20` | Full-set bind retries (4 random ports per attempt). |
 | `PEER_LEARNING_MIN_PACKETS` | `5` | Number of suitable packets required to lock to a doorphone peer source. |
 | `PEER_RELEARN_IDLE_MS` | `1000` | Idle timeout without suitable packets from learned peer before returning to learning. |
 | `PEER_LEARNING_CANDIDATE_TTL_MS` | `4000` | TTL for per-source learning candidates while in learning state. |
@@ -205,3 +206,6 @@ When enabled, video reordering is applied only on A->B video traffic and runs be
 It helps with short out-of-order bursts (for example FU-A reordering), reducing false `seq_gaps`, parser errors caused by packet order, and downstream NACK/PLI pressure.
 
 It does **not** recover true packet loss; missing packets are eventually forced-skipped after timeout/window pressure.
+
+
+Session creation allocates **4 random unique UDP ports** within `[RTP_PORT_MIN..RTP_PORT_MAX]` and binds sockets immediately. If any bind fails, cleaner closes partial sockets and retries another random set up to `RTP_PORT_BIND_ATTEMPTS` (default `20`). RTCP is not supported and `RTP+1` is not reserved.

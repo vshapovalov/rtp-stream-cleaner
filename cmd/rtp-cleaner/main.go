@@ -34,7 +34,7 @@ func main() {
 		logger.Warn("service_password is empty; API access is denied until it is configured")
 	}
 
-	allocator, err := session.NewPortAllocator(cfg.RTPPortMin, cfg.RTPPortMax)
+	allocator, err := session.NewPortAllocator(cfg.RTPPortMin, cfg.RTPPortMax, cfg.RTPPortBindAttempts)
 	if err != nil {
 		logger.Error("failed to init port allocator", "error", err)
 		os.Exit(1)

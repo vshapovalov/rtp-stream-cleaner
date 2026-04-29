@@ -10,6 +10,8 @@ import (
 
 const FileName = "config.json"
 
+const DefaultRTPPortBindAttempts = 20
+
 type Config struct {
 	APIListenAddr              string `json:"api_listen_addr"`
 	ServicePassword            string `json:"service_password"`
@@ -18,6 +20,7 @@ type Config struct {
 	InternalIP                 string `json:"internal_ip"`
 	RTPPortMin                 int    `json:"rtp_port_min"`
 	RTPPortMax                 int    `json:"rtp_port_max"`
+	RTPPortBindAttempts        int    `json:"rtp_port_bind_attempts"`
 	PeerLearningMinPackets     int    `json:"peer_learning_min_packets"`
 	PeerRelearnIdleMS          int    `json:"peer_relearn_idle_ms"`
 	PeerLearningCandidateTTLMS int    `json:"peer_learning_candidate_ttl_ms"`
@@ -59,12 +62,22 @@ func Load() (Config, error) {
 		if err != nil {
 			return Config{}, err
 		}
+		if cfg.RTPPortBindAttempts == 0 {
+			cfg.RTPPortBindAttempts = DefaultRTPPortBindAttempts
+		}
+		if cfg.RTPPortBindAttempts <= 0 {
+			return Config{}, fmt.Errorf("rtp_port_bind_attempts must be > 0")
+		}
 		return cfg, nil
 	} else if !os.IsNotExist(err) {
 		return Config{}, fmt.Errorf("stat config file %s: %w", path, err)
 	}
 
-	return loadFromEnv(), nil
+	cfg := loadFromEnv()
+	if cfg.RTPPortBindAttempts <= 0 {
+		return Config{}, fmt.Errorf("rtp_port_bind_attempts must be > 0")
+	}
+	return cfg, nil
 }
 
 func loadFromFile(path string) (Config, error) {
@@ -76,6 +89,12 @@ func loadFromFile(path string) (Config, error) {
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return Config{}, fmt.Errorf("parse config file %s: %w", path, err)
+	}
+	if cfg.RTPPortBindAttempts == 0 {
+		cfg.RTPPortBindAttempts = DefaultRTPPortBindAttempts
+	}
+	if cfg.RTPPortBindAttempts <= 0 {
+		return Config{}, fmt.Errorf("rtp_port_bind_attempts must be > 0")
 	}
 	return cfg, nil
 }
@@ -90,6 +109,7 @@ func loadFromEnv() Config {
 		InternalIP:                 os.Getenv("INTERNAL_IP"),
 		RTPPortMin:                 getEnvInt("RTP_PORT_MIN", 30000),
 		RTPPortMax:                 getEnvInt("RTP_PORT_MAX", 40000),
+		RTPPortBindAttempts:        getEnvInt("RTP_PORT_BIND_ATTEMPTS", DefaultRTPPortBindAttempts),
 		PeerLearningMinPackets:     getEnvInt("PEER_LEARNING_MIN_PACKETS", 5),
 		PeerRelearnIdleMS:          getEnvInt("PEER_RELEARN_IDLE_MS", 1000),
 		PeerLearningCandidateTTLMS: getEnvInt("PEER_LEARNING_CANDIDATE_TTL_MS", 4000),
