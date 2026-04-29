@@ -8,8 +8,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"rtp-stream-cleaner/internal/logging"
 )
 
 type Media struct {
@@ -148,13 +146,12 @@ func (m *Manager) CreateWithInitialDest(callID, fromTag, toTag string, videoFix 
 }
 
 func (m *Manager) createWithDest(callID, fromTag, toTag string, videoFix bool, isIPv6 bool, initialAudioDest, initialVideoDest *net.UDPAddr) (*Session, error) {
-	ports, err := m.allocator.Allocate(4)
+	network, bindIP, err := resolveRTPBindConfig(isIPv6, m.publicIPv6BindIP)
 	if err != nil {
 		return nil, err
 	}
-	network, bindIP, err := resolveRTPBindConfig(isIPv6, m.publicIPv6BindIP)
+	bindings, err := m.allocator.AllocateBindings(network, bindIP)
 	if err != nil {
-		m.allocator.Release(ports)
 		return nil, err
 	}
 	session := &Session{
@@ -165,14 +162,14 @@ func (m *Manager) createWithDest(callID, fromTag, toTag string, videoFix bool, i
 		IsIPv6:    isIPv6,
 		CreatedAt: m.now(),
 		Audio: Media{
-			APort:          ports[0],
-			BPort:          ports[1],
+			APort:          bindings.AudioA.Port,
+			BPort:          bindings.AudioB.Port,
 			Enabled:        true,
 			DisabledReason: "",
 		},
 		Video: Media{
-			APort:          ports[2],
-			BPort:          ports[3],
+			APort:          bindings.VideoA.Port,
+			BPort:          bindings.VideoB.Port,
 			Enabled:        true,
 			DisabledReason: "",
 		},
@@ -187,50 +184,8 @@ func (m *Manager) createWithDest(callID, fromTag, toTag string, videoFix bool, i
 	session.videoDisabledReason.Store("")
 	applyRTPDest(session, initialAudioDest, initialVideoDest)
 
-	aConn, err := m.listenUDP(network, &net.UDPAddr{IP: bindIP, Port: session.Audio.APort})
-	if err != nil {
-		logging.WithSessionID(session.ID).Error("session.create failed", "error", err)
-		m.allocator.Release(ports)
-		return nil, fmt.Errorf("audio a socket: %w", err)
-	}
-	bConn, err := m.listenUDP(network, &net.UDPAddr{IP: bindIP, Port: session.Audio.BPort})
-	if err != nil {
-		logging.WithSessionID(session.ID).Error("session.create failed", "error", err)
-		if aConn != nil {
-			_ = aConn.Close()
-		}
-		m.allocator.Release(ports)
-		return nil, fmt.Errorf("audio b socket: %w", err)
-	}
-	videoAConn, err := m.listenUDP(network, &net.UDPAddr{IP: bindIP, Port: session.Video.APort})
-	if err != nil {
-		logging.WithSessionID(session.ID).Error("session.create failed", "error", err)
-		if aConn != nil {
-			_ = aConn.Close()
-		}
-		if bConn != nil {
-			_ = bConn.Close()
-		}
-		m.allocator.Release(ports)
-		return nil, fmt.Errorf("video a socket: %w", err)
-	}
-	videoBConn, err := m.listenUDP(network, &net.UDPAddr{IP: bindIP, Port: session.Video.BPort})
-	if err != nil {
-		logging.WithSessionID(session.ID).Error("session.create failed", "error", err)
-		if aConn != nil {
-			_ = aConn.Close()
-		}
-		if bConn != nil {
-			_ = bConn.Close()
-		}
-		if videoAConn != nil {
-			_ = videoAConn.Close()
-		}
-		m.allocator.Release(ports)
-		return nil, fmt.Errorf("video b socket: %w", err)
-	}
-	session.audioProxy = m.newAudioProxy(session, aConn, bConn, m.peerLearningMinPackets, m.peerLearningCandidateTTL, m.peerRelearnIdle, m.proxyLogConfig)
-	session.videoProxy = m.newVideoProxy(session, videoAConn, videoBConn, m.peerLearningMinPackets, m.peerLearningCandidateTTL, m.peerRelearnIdle, m.maxFrameWait, videoFix, m.videoInjectCachedSPSPPS, m.videoReorderEnabled, m.videoReorderMaxPackets, m.videoReorderMaxWait, m.proxyLogConfig)
+	session.audioProxy = m.newAudioProxy(session, bindings.AudioA.Conn, bindings.AudioB.Conn, m.peerLearningMinPackets, m.peerLearningCandidateTTL, m.peerRelearnIdle, m.proxyLogConfig)
+	session.videoProxy = m.newVideoProxy(session, bindings.VideoA.Conn, bindings.VideoB.Conn, m.peerLearningMinPackets, m.peerLearningCandidateTTL, m.peerRelearnIdle, m.maxFrameWait, videoFix, m.videoInjectCachedSPSPPS, m.videoReorderEnabled, m.videoReorderMaxPackets, m.videoReorderMaxWait, m.proxyLogConfig)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()

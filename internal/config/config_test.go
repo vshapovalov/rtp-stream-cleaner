@@ -230,3 +230,29 @@ func setAllEnv(t *testing.T, values map[string]string) {
 		t.Setenv(key, value)
 	}
 }
+
+func TestLoad_DefaultRTPPortBindAttemptsWhenMissing(t *testing.T) {
+	tempDir := t.TempDir()
+	withExecutableDir(t, tempDir)
+	if err := os.WriteFile(filepath.Join(tempDir, FileName), []byte(`{"rtp_port_min":30000,"rtp_port_max":30010}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RTPPortBindAttempts != DefaultRTPPortBindAttempts {
+		t.Fatalf("got %d", cfg.RTPPortBindAttempts)
+	}
+}
+
+func TestLoad_InvalidRTPPortBindAttempts(t *testing.T) {
+	tempDir := t.TempDir()
+	withExecutableDir(t, tempDir)
+	if err := os.WriteFile(filepath.Join(tempDir, FileName), []byte(`{"rtp_port_bind_attempts":-1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(); err == nil {
+		t.Fatal("expected error")
+	}
+}

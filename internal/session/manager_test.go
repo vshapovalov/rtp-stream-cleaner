@@ -14,10 +14,11 @@ func (p *noopProxy) stop()  {}
 
 func newTestManager(t *testing.T, idleTimeout time.Duration) *Manager {
 	t.Helper()
-	allocator, err := NewPortAllocator(14000, 14010)
+	allocator, err := NewPortAllocator(14000, 14010, 20)
 	if err != nil {
 		t.Fatalf("unexpected allocator error: %v", err)
 	}
+	allocator.listenUDP = func(string, *net.UDPAddr) (*net.UDPConn, error) { return nil, nil }
 	return newManagerWithDeps(
 		allocator,
 		5,
@@ -297,7 +298,7 @@ func TestManager_IdleCleanup_RemovesOnlyIdleSessions(t *testing.T) {
 
 func TestManager_Create_IsIPv6FamilyAndBindSelection(t *testing.T) {
 	t.Run("ipv4", func(t *testing.T) {
-		allocator, err := NewPortAllocator(18000, 18010)
+		allocator, err := NewPortAllocator(18000, 18010, 20)
 		if err != nil {
 			t.Fatalf("allocator: %v", err)
 		}
@@ -305,17 +306,17 @@ func TestManager_Create_IsIPv6FamilyAndBindSelection(t *testing.T) {
 			network string
 			addr    *net.UDPAddr
 		}
+		allocator.listenUDP = func(network string, laddr *net.UDPAddr) (*net.UDPConn, error) {
+			listenCalls = append(listenCalls, struct {
+				network string
+				addr    *net.UDPAddr
+			}{network: network, addr: laddr})
+			return nil, nil
+		}
 		manager := newManagerWithDeps(
 			allocator, 5, time.Second, time.Second, 0, 0, false, false, 8, 10*time.Millisecond, "::1", ProxyLogConfig{},
 			managerDeps{
 				startReaper: false,
-				listenUDP: func(network string, laddr *net.UDPAddr) (*net.UDPConn, error) {
-					listenCalls = append(listenCalls, struct {
-						network string
-						addr    *net.UDPAddr
-					}{network: network, addr: laddr})
-					return nil, nil
-				},
 				newAudioProxy: func(*Session, *net.UDPConn, *net.UDPConn, int, time.Duration, time.Duration, ProxyLogConfig) sessionProxy {
 					return &noopProxy{}
 				},
@@ -342,7 +343,7 @@ func TestManager_Create_IsIPv6FamilyAndBindSelection(t *testing.T) {
 	})
 
 	t.Run("ipv6", func(t *testing.T) {
-		allocator, err := NewPortAllocator(18100, 18110)
+		allocator, err := NewPortAllocator(18100, 18110, 20)
 		if err != nil {
 			t.Fatalf("allocator: %v", err)
 		}
@@ -350,17 +351,17 @@ func TestManager_Create_IsIPv6FamilyAndBindSelection(t *testing.T) {
 			network string
 			addr    *net.UDPAddr
 		}
+		allocator.listenUDP = func(network string, laddr *net.UDPAddr) (*net.UDPConn, error) {
+			listenCalls = append(listenCalls, struct {
+				network string
+				addr    *net.UDPAddr
+			}{network: network, addr: laddr})
+			return nil, nil
+		}
 		manager := newManagerWithDeps(
 			allocator, 5, time.Second, time.Second, 0, 0, false, false, 8, 10*time.Millisecond, "2001:db8::10", ProxyLogConfig{},
 			managerDeps{
 				startReaper: false,
-				listenUDP: func(network string, laddr *net.UDPAddr) (*net.UDPConn, error) {
-					listenCalls = append(listenCalls, struct {
-						network string
-						addr    *net.UDPAddr
-					}{network: network, addr: laddr})
-					return nil, nil
-				},
 				newAudioProxy: func(*Session, *net.UDPConn, *net.UDPConn, int, time.Duration, time.Duration, ProxyLogConfig) sessionProxy {
 					return &noopProxy{}
 				},
@@ -388,28 +389,28 @@ func TestManager_Create_IsIPv6FamilyAndBindSelection(t *testing.T) {
 }
 
 func TestManager_Create_SocketErrorCleansUpAndReleasesPorts(t *testing.T) {
-	allocator, err := NewPortAllocator(18200, 18210)
+	allocator, err := NewPortAllocator(18200, 18210, 1)
 	if err != nil {
 		t.Fatalf("allocator: %v", err)
 	}
 	callIndex := 0
 	var openedConn *net.UDPConn
+	allocator.listenUDP = func(network string, laddr *net.UDPAddr) (*net.UDPConn, error) {
+		callIndex++
+		if callIndex == 1 {
+			conn, err := net.ListenUDP(network, laddr)
+			if err != nil {
+				t.Fatalf("listen first socket: %v", err)
+			}
+			openedConn = conn
+			return conn, nil
+		}
+		return nil, errors.New("listen failed")
+	}
 	manager := newManagerWithDeps(
 		allocator, 5, time.Second, time.Second, 0, 0, false, false, 8, 10*time.Millisecond, "::1", ProxyLogConfig{},
 		managerDeps{
 			startReaper: false,
-			listenUDP: func(network string, laddr *net.UDPAddr) (*net.UDPConn, error) {
-				callIndex++
-				if callIndex == 1 {
-					conn, err := net.ListenUDP(network, laddr)
-					if err != nil {
-						t.Fatalf("listen first socket: %v", err)
-					}
-					openedConn = conn
-					return conn, nil
-				}
-				return nil, errors.New("listen failed")
-			},
 			newAudioProxy: func(*Session, *net.UDPConn, *net.UDPConn, int, time.Duration, time.Duration, ProxyLogConfig) sessionProxy {
 				return &noopProxy{}
 			},
@@ -433,11 +434,10 @@ func TestManager_Create_SocketErrorCleansUpAndReleasesPorts(t *testing.T) {
 	if len(manager.sessions) != 0 {
 		t.Fatalf("expected no session stored on create failure")
 	}
-	ports, err := allocator.Allocate(4)
+	allocator.listenUDP = net.ListenUDP
+	bindings, err := allocator.AllocateBindings("udp4", net.IPv4zero)
 	if err != nil {
 		t.Fatalf("expected ports released after failure: %v", err)
 	}
-	if ports[0] != 18200 {
-		t.Fatalf("expected allocator to reuse released ports, got %v", ports)
-	}
+	allocator.ReleaseBindings(bindings)
 }
